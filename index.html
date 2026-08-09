@@ -1,0 +1,3127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Model Pickle Scanner - disassemble a PyTorch checkpoint without executing it</title>
+<meta name="description" content="Drop a .pt, .bin, .ckpt or .pkl file and read its pickle opcode stream in your browser. Never executed. Resolves every GLOBAL and STACK_GLOBAL import by modelling the pickle stack, lists every REDUCE call site, and reproduces the torch weights_only admission decision from torch's own allowed-globals and supported-opcode tables.">
+<link rel="canonical" href="https://0xelitesystem.github.io/model-pickle-scanner/">
+<meta property="og:title" content="Model Pickle Scanner - disassemble a PyTorch checkpoint without executing it">
+<meta property="og:description" content="A pickle disassembler and torch weights_only oracle that runs entirely in the browser tab. Models the pickle stack so STACK_GLOBAL resolves, and ships CVE-2025-71325 as a regression fixture.">
+<meta property="og:url" content="https://0xelitesystem.github.io/model-pickle-scanner/">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary">
+<meta name="theme-color" content="#0b0e15">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%A5%92%3C/text%3E%3C/svg%3E">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Model Pickle Scanner",
+  "applicationCategory": "SecurityApplication",
+  "operatingSystem": "Any browser",
+  "url": "https://0xelitesystem.github.io/model-pickle-scanner/",
+  "description": "Client-side pickle opcode disassembler for PyTorch checkpoints. Resolves GLOBAL and STACK_GLOBAL imports by modelling the pickle stack, lists every REDUCE call site, and reproduces the torch weights_only admission decision from torch's published allowed-globals and supported-opcode tables. Files are never uploaded and pickles are never executed.",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "isAccessibleForFree": true,
+  "author": { "@type": "Organization", "name": "0xelitesystem", "url": "https://elitesystem.ai" }
+}
+</script>
+<style>
+:root{
+  color-scheme: dark;
+  --bg:#0b0e15; --bg2:#11151f; --panel:#151a26; --panel2:#1b2130;
+  --line:#26304a; --line2:#334063;
+  --fg:#dde5f4; --fg-dim:#94a2be; --fg-faint:#6c7a99;
+  --accent:#6fd3ff; --accent-ink:#04202e;
+  --ok:#4ade80; --ok-bg:#0f2a1c;
+  --warn:#fbbf24; --warn-bg:#2d2208;
+  --bad:#ff7b72; --bad-bg:#33161a;
+  --info:#a78bfa; --info-bg:#221b3a;
+  --snap:#f0b429; --snap-bg:#221a06; --snap-line:#5a4514;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --radius:12px;
+}
+:root[data-theme="light"]{
+  color-scheme: light;
+  --bg:#f4f6fb; --bg2:#eceff7; --panel:#ffffff; --panel2:#f5f7fc;
+  --line:#d5dbea; --line2:#b9c3da;
+  --fg:#131824; --fg-dim:#4d5871; --fg-faint:#6f7b95;
+  --accent:#0d5f86; --accent-ink:#ffffff;
+  --ok:#0d7038; --ok-bg:#e4f7ea;
+  --warn:#8a5c00; --warn-bg:#fdf3d8;
+  --bad:#af1d24; --bad-bg:#fdeaea;
+  --info:#5330b8; --info-bg:#eee9fd;
+  --snap:#7a5300; --snap-bg:#fdf5e0; --snap-line:#e0c78a;
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme]){
+    color-scheme: light;
+    --bg:#f4f6fb; --bg2:#eceff7; --panel:#ffffff; --panel2:#f5f7fc;
+    --line:#d5dbea; --line2:#b9c3da;
+    --fg:#131824; --fg-dim:#4d5871; --fg-faint:#6f7b95;
+    --accent:#0d5f86; --accent-ink:#ffffff;
+    --ok:#0d7038; --ok-bg:#e4f7ea;
+    --warn:#8a5c00; --warn-bg:#fdf3d8;
+    --bad:#af1d24; --bad-bg:#fdeaea;
+    --info:#5330b8; --info-bg:#eee9fd;
+    --snap:#7a5300; --snap-bg:#fdf5e0; --snap-line:#e0c78a;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --bg:#0b0e15; --bg2:#11151f; --panel:#151a26; --panel2:#1b2130;
+  --line:#26304a; --line2:#334063;
+  --fg:#dde5f4; --fg-dim:#94a2be; --fg-faint:#6c7a99;
+  --accent:#6fd3ff; --accent-ink:#04202e;
+  --ok:#4ade80; --ok-bg:#0f2a1c;
+  --warn:#fbbf24; --warn-bg:#2d2208;
+  --bad:#ff7b72; --bad-bg:#33161a;
+  --info:#a78bfa; --info-bg:#221b3a;
+  --snap:#f0b429; --snap-bg:#221a06; --snap-line:#5a4514;
+}
+
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:
+    radial-gradient(1100px 520px at 12% -8%, color-mix(in srgb, var(--accent) 11%, transparent), transparent 60%),
+    var(--bg);
+  color:var(--fg); font-family:var(--sans); line-height:1.55;
+  -webkit-text-size-adjust:100%; overflow-x:hidden;
+}
+.wrap{max-width:1180px;margin:0 auto;padding:0 16px 72px}
+a{color:var(--accent)}
+a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible,[tabindex]:focus-visible{
+  outline:3px solid var(--accent); outline-offset:2px; border-radius:6px;
+}
+
+header.top{
+  position:sticky; top:0; z-index:30;
+  background:color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--line);
+}
+.top-in{max-width:1180px;margin:0 auto;padding:10px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:9px;font-weight:700;letter-spacing:-.01em}
+.brand .glyph{
+  width:26px;height:26px;border-radius:7px;display:grid;place-items:center;
+  background:linear-gradient(150deg,var(--accent),color-mix(in srgb,var(--info) 70%, var(--accent)));
+  color:var(--accent-ink);font-family:var(--mono);font-size:12px;font-weight:800;
+}
+.spacer{flex:1 1 auto}
+.btn{
+  font:inherit; font-size:.86rem; padding:7px 13px; border-radius:9px; cursor:pointer;
+  background:var(--panel2); color:var(--fg); border:1px solid var(--line2);
+}
+.btn:hover{border-color:var(--accent)}
+.btn.primary{background:var(--accent); color:var(--accent-ink); border-color:transparent; font-weight:650}
+.btn.small{font-size:.78rem;padding:5px 10px}
+.btn[aria-pressed="true"]{border-color:var(--accent)}
+
+h1{font-size:clamp(1.65rem,4.2vw,2.5rem);line-height:1.14;margin:26px 0 10px;letter-spacing:-.025em}
+h2{font-size:1.16rem;margin:0 0 4px;letter-spacing:-.01em}
+h3{font-size:.95rem;margin:18px 0 6px;color:var(--fg)}
+h4{font-size:.85rem;margin:14px 0 5px;color:var(--fg-dim);text-transform:uppercase;letter-spacing:.07em}
+p{margin:0 0 10px}
+.lede{font-size:1.03rem;color:var(--fg-dim);max-width:74ch}
+.tiny{font-size:.78rem;color:var(--fg-faint)}
+.dim{color:var(--fg-dim)}
+code,kbd,.mono{font-family:var(--mono);font-size:.86em}
+code{background:var(--panel2);border:1px solid var(--line);border-radius:5px;padding:1px 5px}
+
+.panel{
+  background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
+  padding:16px; margin:16px 0;
+}
+.panel > header{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-bottom:10px}
+.panel > header .sub{color:var(--fg-faint);font-size:.8rem}
+
+.badge{
+  display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:.72rem;
+  padding:2px 8px;border-radius:999px;border:1px solid var(--line2);color:var(--fg-dim);
+  white-space:normal;max-width:100%;
+}
+.badge.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 45%,transparent);background:var(--ok-bg)}
+.badge.bad{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 45%,transparent);background:var(--bad-bg)}
+.badge.warn{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 45%,transparent);background:var(--warn-bg)}
+.badge.info{color:var(--info);border-color:color-mix(in srgb,var(--info) 45%,transparent);background:var(--info-bg)}
+.badge.snap{color:var(--snap);border-color:var(--snap-line);background:var(--snap-bg)}
+
+/* Vendor-snapshot styling: everything dated and copied from a vendor lives in
+   a visually distinct shell so a stale row can never be mistaken for output. */
+.snapshot{
+  border:1px dashed var(--snap-line);
+  background:
+    repeating-linear-gradient(135deg, transparent 0 9px, color-mix(in srgb,var(--snap) 5%,transparent) 9px 10px),
+    var(--snap-bg);
+}
+.snapshot > header h2{color:var(--snap)}
+.snapshot .snapnote{font-size:.79rem;color:var(--fg-dim);margin:0 0 10px}
+
+.computed{border-left:3px solid var(--accent)}
+
+.drop{
+  border:2px dashed var(--line2); border-radius:14px; padding:26px 18px; text-align:center;
+  background:var(--panel2); transition:border-color .12s, background .12s;
+}
+.drop.hot{border-color:var(--accent); background:color-mix(in srgb,var(--accent) 10%, var(--panel2))}
+.drop .big{font-size:1.05rem;font-weight:650;margin-bottom:4px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.row.center{justify-content:center}
+.samples{margin-top:14px}
+.samples .row{gap:6px}
+
+.grid{display:grid;gap:12px}
+/* Without this a grid item's automatic minimum size is its min-content width,
+   which a table with min-width:520px inside a .scrollx would push past a 360px
+   viewport instead of scrolling inside its own box. */
+.grid > *{min-width:0}
+@media(min-width:760px){ .grid.two{grid-template-columns:1fr 1fr} }
+
+.kv{display:grid;grid-template-columns:auto 1fr;gap:2px 14px;font-size:.85rem}
+.kv dt{color:var(--fg-faint);font-family:var(--mono);font-size:.78rem}
+.kv dd{margin:0;font-family:var(--mono);word-break:break-word}
+
+.scrollx{overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--line);border-radius:10px;background:var(--panel2)}
+.scrolly{max-height:460px;overflow-y:auto}
+table{border-collapse:collapse;width:100%;font-size:.82rem;min-width:520px}
+th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{position:sticky;top:0;background:var(--panel2);color:var(--fg-dim);font-weight:600;font-size:.74rem;text-transform:uppercase;letter-spacing:.05em;z-index:1}
+tbody tr:last-child td{border-bottom:none}
+td.m,th.m{font-family:var(--mono)}
+td.num{text-align:right;font-family:var(--mono);color:var(--fg-dim);white-space:nowrap}
+tr.hit td{background:color-mix(in srgb,var(--bad) 12%,transparent)}
+tr.note td{background:color-mix(in srgb,var(--warn) 10%,transparent)}
+tr.good td{background:color-mix(in srgb,var(--ok) 9%,transparent)}
+
+pre{margin:0;padding:12px;font-family:var(--mono);font-size:.79rem;line-height:1.5;white-space:pre;color:var(--fg)}
+.codewrap{position:relative}
+.codewrap .copy{position:absolute;top:8px;right:8px}
+
+.verdict{border-radius:12px;padding:14px 16px;border:1px solid var(--line2);background:var(--panel2)}
+.verdict.reject{border-color:color-mix(in srgb,var(--bad) 55%,transparent);background:var(--bad-bg)}
+.verdict.pass{border-color:color-mix(in srgb,var(--ok) 55%,transparent);background:var(--ok-bg)}
+.verdict.undecided{border-color:color-mix(in srgb,var(--warn) 55%,transparent);background:var(--warn-bg)}
+.verdict .head{font-size:1.05rem;font-weight:700;display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+.verdict .pin{font-family:var(--mono);font-size:.74rem;color:var(--fg-dim);margin-top:7px;border-top:1px dotted var(--line2);padding-top:7px}
+
+ul.tight{margin:6px 0 10px;padding-left:20px}
+ul.tight li{margin:3px 0}
+
+details{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--panel2);margin:10px 0}
+details > summary{cursor:pointer;font-weight:600;font-size:.9rem}
+details[open] > summary{margin-bottom:8px}
+
+.empty{
+  text-align:center;padding:26px 16px;color:var(--fg-dim);
+  border:1px dashed var(--line2);border-radius:12px;background:var(--panel2);
+}
+.empty .big{font-size:1rem;color:var(--fg);font-weight:600;margin-bottom:4px}
+
+.hidden{display:none !important}
+.visually-hidden{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:.76rem;color:var(--fg-faint);margin-top:8px}
+.legend span{display:inline-flex;align-items:center;gap:5px}
+.swatch{width:11px;height:11px;border-radius:3px;display:inline-block;border:1px solid var(--line2)}
+
+.filterbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0}
+input[type="search"],input[type="text"],textarea,select{
+  font:inherit;font-size:.85rem;background:var(--panel2);color:var(--fg);
+  border:1px solid var(--line2);border-radius:8px;padding:6px 10px;
+}
+textarea{width:100%;font-family:var(--mono);font-size:.8rem;min-height:76px;resize:vertical}
+
+footer.site{border-top:1px solid var(--line);margin-top:34px;padding:20px 0;color:var(--fg-dim);font-size:.86rem}
+footer.site .row{gap:16px}
+
+.progress{height:4px;background:var(--line);border-radius:99px;overflow:hidden;margin-top:10px}
+.progress > i{display:block;height:100%;background:var(--accent);width:0%;transition:width .2s}
+
+.srcs li{font-size:.8rem;margin:5px 0;word-break:break-word}
+.pill-row{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0}
+mark{background:color-mix(in srgb,var(--accent) 30%,transparent);color:inherit;border-radius:3px;padding:0 2px}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="top-in">
+    <div class="brand"><span class="glyph" aria-hidden="true">PK</span><span>Model Pickle Scanner</span></div>
+    <div class="spacer"></div>
+    <button type="button" class="btn small" id="btn-selftest">Run self-tests</button>
+    <button type="button" class="btn small" id="btn-theme" aria-pressed="false">
+      <span id="theme-label">Light mode</span>
+    </button>
+  </div>
+</header>
+
+<main class="wrap" id="main">
+
+  <h1>Read a PyTorch checkpoint's pickle without running it</h1>
+  <p class="lede">
+    <strong>Input artifact: a checkpoint file.</strong> Drop a <code>.pt</code>, <code>.bin</code>,
+    <code>.ckpt</code> or <code>.pkl</code> and this page disassembles the pickle opcode stream inside it,
+    in your tab, with nothing uploaded and nothing executed. You get two things: the permanent
+    <strong>opcode and import inventory</strong> (every <code>GLOBAL</code> and <code>STACK_GLOBAL</code>
+    the file resolves, every <code>REDUCE</code> that calls one), and the answer people actually want
+    since PyTorch 2.6 flipped <code>weights_only</code> to <code>True</code> by default:
+    <strong>would <code>torch.load(weights_only=True)</code> accept this file, and which exact global
+    or opcode is the blocker.</strong>
+  </p>
+
+  <div class="row" style="margin:14px 0 6px">
+    <span class="badge ok">No upload</span>
+    <span class="badge ok">No execution</span>
+    <span class="badge ok">No external dependencies</span>
+    <span class="badge info">Streams by byte range, a 14 GB checkpoint is never read into memory</span>
+  </div>
+
+  <!-- ============ INPUT ============ -->
+  <section class="panel" aria-labelledby="h-input">
+    <header><h2 id="h-input">1. Load a file</h2>
+      <span class="sub">Or start with a fixture. Everything below is computed from the bytes you give it.</span>
+    </header>
+
+    <div class="drop" id="drop" tabindex="0" role="button" aria-describedby="drop-help">
+      <div class="big">Drop a checkpoint here</div>
+      <div class="tiny" id="drop-help">or press Enter / click to choose a file. Nothing leaves the tab.</div>
+      <div class="row center" style="margin-top:12px">
+        <button type="button" class="btn primary" id="btn-pick">Choose file</button>
+        <input type="file" id="file" class="visually-hidden" aria-label="Choose a checkpoint file to disassemble">
+      </div>
+      <div class="progress hidden" id="prog"><i></i></div>
+    </div>
+
+    <div class="samples">
+      <h3 style="margin-top:0">Load sample</h3>
+      <div class="row" id="sample-row"></div>
+      <p class="tiny" style="margin-top:8px" id="sample-note">
+        Samples are byte sequences built in this page. The first one is the exact proof-of-concept
+        published in GHSA-9gvj-pp9x-gcfr. All example payload strings are inert placeholders.
+      </p>
+    </div>
+
+    <details>
+      <summary>Simulate <code>torch.serialization.add_safe_globals</code></summary>
+      <p class="tiny">One dotted path per line, for example <code>numpy.core.multiarray._reconstruct</code>.
+      These are added to the allowlist for the verdict below, exactly as <code>add_safe_globals</code> would.
+      The four blocklisted modules cannot be re-allowed this way, and the tool shows that.</p>
+      <label class="visually-hidden" for="extra-safe">Extra safe globals, one dotted path per line</label>
+      <textarea id="extra-safe" spellcheck="false" placeholder="numpy.core.multiarray._reconstruct"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button type="button" class="btn small" id="btn-reapply">Re-evaluate with these</button>
+      </div>
+    </details>
+  </section>
+
+  <div id="results" class="hidden">
+
+    <!-- ============ FILE / CONTAINER ============ -->
+    <section class="panel computed" aria-labelledby="h-file">
+      <header><h2 id="h-file">2. Container</h2><span class="sub">What kind of file this is, and how the pickles were found.</span></header>
+      <div id="file-summary"></div>
+      <div id="members-block"></div>
+    </section>
+
+    <!-- ============ VERDICT ============ -->
+    <section class="panel computed" aria-labelledby="h-verdict">
+      <header>
+        <h2 id="h-verdict">3. Would <code>torch.load(weights_only=True)</code> accept it?</h2>
+        <span class="sub">Computed here from your bytes, against the dated reference tables in section 7.</span>
+      </header>
+      <div id="verdict-block"></div>
+    </section>
+
+    <!-- ============ IMPORTS ============ -->
+    <section class="panel computed" aria-labelledby="h-imports">
+      <header>
+        <h2 id="h-imports">4. Import and call inventory</h2>
+        <span class="sub">Every import the file resolves, and every opcode that would call one.</span>
+      </header>
+      <div id="imports-block"></div>
+    </section>
+
+    <!-- ============ DISASSEMBLY ============ -->
+    <section class="panel computed" aria-labelledby="h-dis">
+      <header>
+        <h2 id="h-dis">5. Opcode disassembly</h2>
+        <span class="sub">Offsets match <code>pickletools.dis</code>. The stack column is a real stack model, not a text window.</span>
+      </header>
+      <div class="filterbar">
+        <label class="tiny" for="dis-select">Pickle stream</label>
+        <select id="dis-select"></select>
+        <button type="button" class="btn small" id="btn-copy-dis">Copy disassembly</button>
+      </div>
+      <div id="dis-block"></div>
+    </section>
+
+  </div>
+
+  <div id="empty-state" class="panel">
+    <div class="empty">
+      <div class="big">Nothing loaded yet</div>
+      <div>Drop a checkpoint above, or press one of the sample buttons to see the full output on a known payload.</div>
+    </div>
+  </div>
+
+  <!-- ============ CVE REGRESSION ============ -->
+  <section class="panel" aria-labelledby="h-cve">
+    <header>
+      <h2 id="h-cve">6. Regression fixture: CVE-2025-71325</h2>
+      <span class="sub">The incumbent scanner's published off-by-one, reproduced as a permanent test.</span>
+    </header>
+    <p>
+      GHSA-9gvj-pp9x-gcfr describes a parsing bug in <code>picklescan</code>'s <code>_list_globals</code>.
+      Handling <code>STACK_GLOBAL</code> at op index <code>n</code>, the backwards scan for the two string
+      operands looped <code>range(1, n)</code>, which reaches op index <code>n-1</code> down to <code>1</code>
+      and never reaches index <code>0</code>. The advisory's own words:
+    </p>
+    <blockquote style="margin:0 0 10px;padding:8px 12px;border-left:3px solid var(--line2);color:var(--fg-dim);font-size:.88rem">
+      "The loop only consider the range from <code>1</code> to <code>n-1</code> but forgets to consider the
+      opcode at position <code>0</code>. The correct range should be <code>0</code> to <code>n-1</code>."
+    </blockquote>
+    <p>
+      In a protocol 0 or 1 pickle there is no <code>PROTO</code> opcode, so index 0 is a real operand.
+      Put one of the two names there and the scan finds only one value, raises <code>ValueError</code>,
+      and the scan errors out instead of reporting. This page reimplements all three behaviours from the
+      published source and runs them on the advisory's exact 26-byte payload, so the hole cannot be
+      inherited here without the test going red.
+    </p>
+    <div id="cve-block"></div>
+  </section>
+
+  <!-- ============ REFERENCE SNAPSHOT ============ -->
+  <section class="panel snapshot" aria-labelledby="h-ref">
+    <header>
+      <h2 id="h-ref">7. Reference snapshot (dated vendor data)</h2>
+      <span class="badge snap" id="snap-badge">torch v2.13.0</span>
+    </header>
+    <p class="snapnote">
+      Everything in this section is <strong>copied from PyTorch's source, not computed by this tool</strong>,
+      and it is shown in a dashed amber shell for exactly that reason. The allowlist grows every release.
+      If a row here is stale, the tool's logic is still correct and only this table needs refreshing.
+      Read it as "the tables as of the pinned tag", never as "the truth forever".
+    </p>
+    <dl class="kv" style="margin-bottom:12px">
+      <dt>pinned tag</dt><dd id="ref-tag">v2.13.0</dd>
+      <dt>tag released</dt><dd id="ref-date">2026-07-08</dd>
+      <dt>transcribed</dt><dd id="ref-transcribed">2026-08-09</dd>
+      <dt>source file</dt><dd><a href="https://github.com/pytorch/pytorch/blob/v2.13.0/torch/_weights_only_unpickler.py">torch/_weights_only_unpickler.py</a></dd>
+    </dl>
+
+    <h3>7a. Opcodes the weights_only unpickler implements</h3>
+    <p class="tiny">Read off the <code>elif key[0] == ...</code> chain in <code>Unpickler.load()</code>.
+      Anything not on this list raises <code>UnpicklingError("Unsupported operand {byte}")</code>.
+      This is why a file can be rejected with no dangerous import in it at all.</p>
+    <div class="scrollx"><div id="ref-opcodes"></div></div>
+
+    <h3>7b. Allowed globals</h3>
+    <div class="filterbar">
+      <label class="visually-hidden" for="allow-filter">Filter allowed globals</label>
+      <input type="search" id="allow-filter" placeholder="filter, e.g. Storage or rebuild" autocomplete="off">
+      <span class="tiny" id="allow-count"></span>
+    </div>
+    <div class="scrollx scrolly"><table id="allow-table">
+      <thead><tr><th>dotted path</th><th>family</th><th>how torch builds it</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+
+    <h3>7c. Modules that can never be allowlisted</h3>
+    <p class="tiny">From <code>_blocklisted_modules</code>: refused even if you pass them to
+      <code>add_safe_globals</code>. Try it in the box in section 1.</p>
+    <div class="pill-row" id="ref-blocklist"></div>
+  </section>
+
+  <!-- ============ METHOD ============ -->
+  <section class="panel" aria-labelledby="h-method">
+    <header><h2 id="h-method">8. How it works, and what it does not decide</h2></header>
+
+    <h3>Reading the file</h3>
+    <ul class="tight">
+      <li>A <code>.pt</code> saved by <code>torch.save</code> is a ZIP. The page reads the last 66000
+        bytes through <code>File.slice</code>, which covers a maximum-length archive comment plus the
+        ZIP64 locator, finds the end-of-central-directory record, walks the central directory, and
+        then slices only the bytes of each pickle member. Tensor data is never read. A multi-gigabyte
+        checkpoint costs a few kilobytes of transfer from disk.</li>
+      <li>ZIP64 is handled: when the classic record carries the 0xFFFF / 0xFFFFFFFF sentinels the page
+        follows the ZIP64 locator and record, and reads the 64-bit fields from the per-entry
+        <code>0x0001</code> extra field.</li>
+      <li><strong>Every</strong> archive member whose name ends in <code>.pkl</code> or
+        <code>.debug_pkl</code> is walked, not just <code>data.pkl</code>, because a TorchScript
+        archive also carries <code>constants.pkl</code>, <code>callstack_debug_map.pkl</code> and one
+        <code>code/&lt;name&gt;.py.debug_pkl</code> per source file. Those debug records are pickles.</li>
+      <li>Stored members are read as-is. <code>PyTorchStreamWriter::writeRecord</code> declares
+        <code>bool compress = false</code>, and every call on the <code>torch.save</code> path takes
+        that default, so a plain checkpoint is stored rather than deflated. TorchScript is the
+        exception: <code>export_module.cpp</code> passes
+        <code>size &gt; kMinToCompress</code> with <code>kMinToCompress = 200</code>, so source files
+        and <code>.debug_pkl</code> records over 200 bytes <em>are</em> deflated. Those go through
+        <code>DecompressionStream("deflate-raw")</code>, which MDN marks as available across browsers
+        since May 2023, so there is no bundled inflate and no wasm. Extracted bytes are CRC32-checked
+        against the central directory value.</li>
+      <li>The legacy non-ZIP <code>torch.save</code> format is <strong>refused, not guessed at</strong>.
+        Its first record is a protocol 2 pickle of the magic number
+        <code>0x1950A86A20F9469CFC6C</code>, which the page recognises by its exact 14-byte prefix, and
+        the even older tar layout is recognised by the <code>ustar</code> marker at offset 257.
+        Mis-parsing those quietly would be worse than saying no.</li>
+    </ul>
+
+    <h3>Resolving imports</h3>
+    <ul class="tight">
+      <li><code>GLOBAL</code> carries module and name inline, so a text scan finds it.
+        <code>STACK_GLOBAL</code> does not: the module and the name are pushed as two separate stack
+        items and never appear as one contiguous token. This page therefore runs a real pickle stack,
+        including the memo, the mark stack and the metastack, and pops the two operands the way CPython
+        does. That also means a <code>STACK_GLOBAL</code> fed from <code>BINGET</code> resolves correctly.</li>
+      <li>The opcode table covers all 68 opcodes CPython's pickle module defines across protocols 0
+        through 5, so an argument length is never guessed. Strings are rendered as printable ASCII
+        with <code>\xNN</code> and <code>\uNNNN</code> escapes,
+        so a module name carrying control characters or bidi overrides cannot disguise itself in the
+        output of a tool you are using to look for disguises.</li>
+      <li>Lookups use null-prototype maps, so an import literally named <code>__proto__</code> or
+        <code>constructor</code> is reported as what it is instead of colliding with a JavaScript
+        built-in. There is a self-test for it.</li>
+    </ul>
+
+    <h3>The weights_only decision</h3>
+    <ul class="tight">
+      <li>Two finite tables from <code>torch/_weights_only_unpickler.py</code>: the opcodes the loop
+        implements, and the globals <code>_get_allowed_globals()</code> registers. Both are in section 7,
+        dated and marked as vendor data.</li>
+      <li>Torch applies the Python 2 to 3 rename tables to a <code>GLOBAL</code> <em>before</em> checking
+        the blocklist, so <code>__builtin__.intern</code> becomes <code>sys.intern</code> and is blocked
+        by module. That rewrite is implemented here.</li>
+      <li>Torch raises on the first problem it hits. The page shows that one as the blocker and lists the
+        rest as what you would hit next.</li>
+    </ul>
+
+    <h3 id="not-decided">What this tool does not decide</h3>
+    <p>These checks in torch's unpickler depend on runtime object types, which a static reader cannot
+      know. If your file only trips one of these, this page will say "no blocker found" and torch will
+      still refuse. That is a real gap and it is stated here rather than buried:</p>
+    <ul class="tight">
+      <li><code>BUILD</code> is restricted to <code>Tensor</code>, <code>Parameter</code>,
+        <code>OrderedDict</code> or an allowlisted type, judged by the runtime type of the instance.</li>
+      <li><code>APPEND</code> and <code>APPENDS</code> are restricted to <code>list</code> and to
+        allowlisted list subclasses.</li>
+      <li><code>SETITEM</code> and <code>SETITEMS</code> are restricted to <code>dict</code>,
+        <code>OrderedDict</code> and <code>Counter</code>.</li>
+      <li><code>BINPERSID</code> requires the persistent id to be a tuple or int whose first element
+        decodes to <code>"storage"</code>.</li>
+      <li>Anything an allowlisted rebuild function does with the arguments it is handed.</li>
+    </ul>
+    <p class="tiny">And the wider point: a file that <code>weights_only=True</code> accepts is not
+      thereby a file you should trust with <code>weights_only=False</code>. The torch documentation is
+      blunt about the general case: "<code>torch.load()</code> uses an unpickler under the hood.
+      <strong>Never load data from an untrusted source.</strong>"</p>
+
+    <h3>Primary sources</h3>
+    <ul class="tight srcs">
+      <li><a href="https://github.com/pytorch/pytorch/blob/v2.13.0/torch/_weights_only_unpickler.py">torch/_weights_only_unpickler.py at v2.13.0</a> - the allowed-globals table, the opcode chain, the blocklist and the exact error strings.</li>
+      <li><a href="https://github.com/pytorch/pytorch/blob/v2.13.0/torch/serialization.py">torch/serialization.py at v2.13.0</a> - <code>MAGIC_NUMBER = 0x1950A86A20F9469CFC6C</code>, <code>_is_zipfile</code> checking for the local header magic <code>PK\x03\x04</code>, and the <code>data.pkl</code> record name. Note the signature is <code>weights_only: bool | None = None</code>, not <code>True</code>: <code>_default_to_weights_only()</code> resolves <code>None</code> to <code>True</code> only when <code>pickle_module is None</code> and the build is not fbcode, so passing a <code>pickle_module</code> silently opts you back out.</li>
+      <li><a href="https://github.com/pytorch/pytorch/blob/v2.13.0/caffe2/serialize/inline_container.h">caffe2/serialize/inline_container.h at v2.13.0</a> - <code>PyTorchStreamWriter::writeRecord</code> declares <code>bool compress = false</code>, and the <code>torch.save</code> path takes that default. <a href="https://github.com/pytorch/pytorch/blob/v2.13.0/torch/csrc/jit/serialization/export_module.cpp">export_module.cpp</a> is the one caller that overrides it, with <code>static constexpr size_t kMinToCompress = 200</code>, which is why TorchScript source and <code>.debug_pkl</code> records can arrive deflated.</li>
+      <li><a href="https://github.com/pytorch/pytorch/blob/v2.13.0/torch/csrc/utils/tensor_types.cpp">torch/csrc/utils/tensor_types.cpp at v2.13.0</a> - <code>all_declared_types()</code> lists <code>{CPU, CUDA, SparseCPU, SparseCUDA}</code> as an unconditional literal, so the <code>torch.cuda.*Tensor</code> rows are build-independent, and skips Bool for the sparse backends with the comment "there is no sparse bool type".</li>
+      <li><a href="https://github.com/pytorch/pytorch/releases/tag/v2.6.0">PyTorch 2.6.0 release notes</a> - "Flip default torch.load to weights_only".</li>
+      <li><a href="https://github.com/advisories/GHSA-9gvj-pp9x-gcfr">GHSA-9gvj-pp9x-gcfr / CVE-2025-71325</a> - the picklescan STACK_GLOBAL range bug, its proof of concept and its disassembly offsets.</li>
+      <li><a href="https://github.com/mmaitre314/picklescan/blob/v1.0.5/src/picklescan/scanner.py">picklescan scanner.py at v1.0.5</a> and <a href="https://github.com/mmaitre314/picklescan/blob/2a8383cfeb4158567f9770d86597300c9e508d0f/src/picklescan/scanner.py">at the vulnerable commit</a> - the two <code>_list_globals</code> loops reimplemented in section 6. The 0.0.27 release changed both the range and the string-opcode list.</li>
+      <li><a href="https://docs.python.org/3/library/pickletools.html">Python pickletools</a> and <a href="https://github.com/python/cpython/blob/3.13/Lib/pickle.py">CPython Lib/pickle.py</a> - the opcode byte values and argument encodings.</li>
+      <li><a href="https://developer.mozilla.org/en-US/docs/Web/API/DecompressionStream/DecompressionStream">MDN DecompressionStream()</a> - <code>deflate-raw</code> is documented as "Decompress the stream using the DEFLATE algorithm without a header and trailing checksum", and the API is marked "available across browsers since May 2023".</li>
+      <li><a href="https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT">PKWARE APPNOTE.TXT</a> - ZIP end-of-central-directory, central directory and ZIP64 record layouts.</li>
+    </ul>
+  </section>
+
+  <!-- ============ SELF TESTS ============ -->
+  <section class="panel" aria-labelledby="h-tests">
+    <header><h2 id="h-tests">9. Self-tests</h2>
+      <span class="sub">Assertions over the pure functions, run in your browser.</span></header>
+    <p class="tiny">Every fixture below was disassembled with Python's <code>pickletools</code> first, and the
+      expected offsets are that output. The CVE row's expected offsets come from the advisory text itself.</p>
+    <div class="row"><button type="button" class="btn" id="btn-selftest2">Run self-tests</button>
+      <span id="test-summary" class="badge" aria-live="polite">not run</span></div>
+    <div id="test-block"></div>
+  </section>
+
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <div class="row">
+      <a href="https://elitesystem.ai">An elitesystem.ai tool</a>
+      <a href="https://github.com/0xelitesystem/model-pickle-scanner">Source on GitHub</a>
+      <a href="https://0xelitesystem.github.io/">More tools</a>
+    </div>
+    <p class="tiny" style="margin-top:10px">
+      Runs entirely in your browser. No upload, no network calls, no pickle is ever executed.
+      Vendor tables are dated snapshots, not live data.
+    </p>
+  </div>
+</footer>
+
+<script>
+"use strict";
+
+/* =====================================================================
+   PURE CORE
+   Every function in this block takes plain values and returns a plain
+   result object. None of them touch document or window. They are
+   extractable and runnable in Node as-is.
+   ===================================================================== */
+
+/* ---------- tiny helpers ---------- */
+
+function hex2(n){ var s = (n & 0xff).toString(16); return s.length < 2 ? "0" + s : s; }
+function hex4(n){ var s = (n & 0xffff).toString(16); while (s.length < 4) s = "0" + s; return s; }
+
+function escapeHtml(value){
+  var s = String(value);
+  var out = "";
+  for (var i = 0; i < s.length; i++){
+    var c = s.charAt(i);
+    if (c === "&") out += "&amp;";
+    else if (c === "<") out += "&lt;";
+    else if (c === ">") out += "&gt;";
+    else if (c === '"') out += "&quot;";
+    else if (c === "'") out += "&#39;";
+    else if (c === "`") out += "&#96;";
+    else out += c;
+  }
+  return out;
+}
+
+/* Render any string as printable ASCII. Anything outside 0x20..0x7E becomes an
+   escape, which stops control characters and bidi overrides from disguising an
+   import name in the output of a tool built to find disguises. */
+function asciiSafe(value, maxLen){
+  var limit = Number.isFinite(maxLen) && maxLen > 0 ? Math.floor(maxLen) : 300;
+  var s = String(value);
+  var out = [];
+  var truncated = false;
+  for (var i = 0; i < s.length; i++){
+    if (out.length >= limit){ truncated = true; break; }
+    var code = s.charCodeAt(i);
+    var ch = s.charAt(i);
+    if (ch === "\\") out.push("\\\\");
+    else if (code >= 0x20 && code <= 0x7e) out.push(ch);
+    else if (code <= 0xff) out.push("\\x" + hex2(code));
+    else out.push("\\u" + hex4(code));
+  }
+  return out.join("") + (truncated ? "..." : "");
+}
+
+function u16le(b, o){ return b[o] | (b[o + 1] << 8); }
+function u32le(b, o){
+  return (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16)) + (b[o + 3] * 16777216);
+}
+function i32le(b, o){
+  return (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24));
+}
+function u64le(b, o){
+  var lo = u32le(b, o);
+  var hi = u32le(b, o + 4);
+  return BigInt(hi) * BigInt(4294967296) + BigInt(lo);
+}
+/* Every 64-bit value that reaches arithmetic or the display goes through here. */
+function bigToSafe(v){
+  if (typeof v !== "bigint") return { ok: false, value: 0, reason: "not a bigint" };
+  if (v < BigInt(0)) return { ok: false, value: 0, reason: "negative" };
+  if (v > BigInt(Number.MAX_SAFE_INTEGER)) return { ok: false, value: 0, reason: "exceeds 2^53-1" };
+  var n = Number(v);
+  if (!Number.isSafeInteger(n)) return { ok: false, value: 0, reason: "not a safe integer" };
+  return { ok: true, value: n, reason: "" };
+}
+
+function decodeLatin1(b, off, len){
+  var out = "";
+  var end = off + len;
+  for (var i = off; i < end; i++) out += String.fromCharCode(b[i]);
+  return out;
+}
+
+function decodeUtf8(b, off, len){
+  if (typeof TextDecoder !== "undefined"){
+    if (!decodeUtf8.dec) decodeUtf8.dec = new TextDecoder("utf-8", { fatal: false });
+    return decodeUtf8.dec.decode(b.subarray(off, off + len));
+  }
+  return decodeLatin1(b, off, len);
+}
+
+/* Little-endian two's complement, the encoding used by LONG1 and LONG4. */
+function decodeLongBytes(b, off, n){
+  if (n <= 0) return BigInt(0);
+  var v = BigInt(0);
+  for (var i = n - 1; i >= 0; i--) v = (v << BigInt(8)) | BigInt(b[off + i]);
+  var bits = BigInt(8 * n);
+  var signBit = BigInt(1) << (bits - BigInt(1));
+  if (v >= signBit) v -= (BigInt(1) << bits);
+  return v;
+}
+
+/* Approximate decoder for a Python string literal body, used by the protocol 0
+   STRING opcode. Handles the escapes that appear in real pickles. */
+function unescapePyLiteral(s){
+  var out = "";
+  var i = 0;
+  while (i < s.length){
+    var c = s.charAt(i);
+    if (c !== "\\"){ out += c; i++; continue; }
+    i++;
+    if (i >= s.length){ out += "\\"; break; }
+    var e = s.charAt(i); i++;
+    if (e === "n") out += "\n";
+    else if (e === "t") out += "\t";
+    else if (e === "r") out += "\r";
+    else if (e === "0") out += String.fromCharCode(0);
+    else if (e === "\\") out += "\\";
+    else if (e === "'") out += "'";
+    else if (e === '"') out += '"';
+    else if (e === "x"){
+      var h = s.substr(i, 2);
+      var v = parseInt(h, 16);
+      if (h.length === 2 && Number.isFinite(v)){ out += String.fromCharCode(v); i += 2; }
+      else out += "\\x";
+    } else out += "\\" + e;
+  }
+  return out;
+}
+
+/* ---------- opcode table ---------- */
+/* Byte values and argument encodings transcribed from CPython Lib/pickle.py.
+   argKind values are read by readArg below. */
+function getOpcodeTable(){
+  if (getOpcodeTable.cache) return getOpcodeTable.cache;
+  var spec = [
+    [0x28, "MARK", 0, "none"],
+    [0x2e, "STOP", 0, "none"],
+    [0x30, "POP", 0, "none"],
+    [0x31, "POP_MARK", 1, "none"],
+    [0x32, "DUP", 0, "none"],
+    [0x46, "FLOAT", 0, "nl"],
+    [0x47, "BINFLOAT", 1, "float8"],
+    [0x49, "INT", 0, "nl"],
+    [0x4a, "BININT", 1, "int4"],
+    [0x4b, "BININT1", 1, "uint1"],
+    [0x4c, "LONG", 0, "nl"],
+    [0x4d, "BININT2", 1, "uint2"],
+    [0x4e, "NONE", 0, "none"],
+    [0x50, "PERSID", 0, "nl"],
+    [0x51, "BINPERSID", 1, "none"],
+    [0x52, "REDUCE", 0, "none"],
+    [0x53, "STRING", 0, "nlquoted"],
+    [0x54, "BINSTRING", 1, "str4"],
+    [0x55, "SHORT_BINSTRING", 1, "str1"],
+    [0x56, "UNICODE", 0, "nl"],
+    [0x58, "BINUNICODE", 1, "uni4"],
+    [0x29, "EMPTY_TUPLE", 1, "none"],
+    [0x5d, "EMPTY_LIST", 1, "none"],
+    [0x61, "APPEND", 0, "none"],
+    [0x62, "BUILD", 0, "none"],
+    [0x63, "GLOBAL", 0, "nl2"],
+    [0x64, "DICT", 0, "none"],
+    [0x65, "APPENDS", 1, "none"],
+    [0x67, "GET", 0, "nl"],
+    [0x68, "BINGET", 1, "uint1"],
+    [0x69, "INST", 0, "nl2"],
+    [0x6a, "LONG_BINGET", 1, "uint4"],
+    [0x6c, "LIST", 0, "none"],
+    [0x6f, "OBJ", 1, "none"],
+    [0x70, "PUT", 0, "nl"],
+    [0x71, "BINPUT", 1, "uint1"],
+    [0x72, "LONG_BINPUT", 1, "uint4"],
+    [0x73, "SETITEM", 0, "none"],
+    [0x74, "TUPLE", 0, "none"],
+    [0x75, "SETITEMS", 1, "none"],
+    [0x7d, "EMPTY_DICT", 1, "none"],
+    [0x42, "BINBYTES", 3, "bytes4"],
+    [0x43, "SHORT_BINBYTES", 3, "bytes1"],
+    [0x80, "PROTO", 2, "uint1"],
+    [0x81, "NEWOBJ", 2, "none"],
+    [0x82, "EXT1", 2, "uint1"],
+    [0x83, "EXT2", 2, "uint2"],
+    [0x84, "EXT4", 2, "int4"],
+    [0x85, "TUPLE1", 2, "none"],
+    [0x86, "TUPLE2", 2, "none"],
+    [0x87, "TUPLE3", 2, "none"],
+    [0x88, "NEWTRUE", 2, "none"],
+    [0x89, "NEWFALSE", 2, "none"],
+    [0x8a, "LONG1", 2, "long1"],
+    [0x8b, "LONG4", 2, "long4"],
+    [0x8c, "SHORT_BINUNICODE", 4, "uni1"],
+    [0x8d, "BINUNICODE8", 4, "uni8"],
+    [0x8e, "BINBYTES8", 4, "bytes8"],
+    [0x8f, "EMPTY_SET", 4, "none"],
+    [0x90, "ADDITEMS", 4, "none"],
+    [0x91, "FROZENSET", 4, "none"],
+    [0x92, "NEWOBJ_EX", 4, "none"],
+    [0x93, "STACK_GLOBAL", 4, "none"],
+    [0x94, "MEMOIZE", 4, "none"],
+    [0x95, "FRAME", 4, "uint8"],
+    [0x96, "BYTEARRAY8", 5, "bytes8"],
+    [0x97, "NEXT_BUFFER", 5, "none"],
+    [0x98, "READONLY_BUFFER", 5, "none"]
+  ];
+  var table = new Array(256);
+  for (var i = 0; i < spec.length; i++){
+    var row = spec[i];
+    table[row[0]] = { code: row[0], name: row[1], proto: row[2], argKind: row[3] };
+  }
+  getOpcodeTable.cache = table;
+  return table;
+}
+
+function opcodeNameByte(code){
+  var t = getOpcodeTable();
+  var e = t[code & 0xff];
+  return e ? e.name : "?";
+}
+
+/* Read one opcode argument. Returns {ok, next, value, text} or {ok:false, reason}. */
+function readArg(bytes, pos, kind){
+  var n, len, s, idx, v, safe;
+  if (kind === "none") return { ok: true, next: pos, value: null, text: "" };
+
+  if (kind === "uint1"){
+    if (pos + 1 > bytes.length) return { ok: false, reason: "truncated uint1" };
+    return { ok: true, next: pos + 1, value: bytes[pos], text: String(bytes[pos]) };
+  }
+  if (kind === "uint2"){
+    if (pos + 2 > bytes.length) return { ok: false, reason: "truncated uint2" };
+    n = u16le(bytes, pos);
+    return { ok: true, next: pos + 2, value: n, text: String(n) };
+  }
+  if (kind === "uint4"){
+    if (pos + 4 > bytes.length) return { ok: false, reason: "truncated uint4" };
+    n = u32le(bytes, pos);
+    return { ok: true, next: pos + 4, value: n, text: String(n) };
+  }
+  if (kind === "int4"){
+    if (pos + 4 > bytes.length) return { ok: false, reason: "truncated int4" };
+    n = i32le(bytes, pos);
+    return { ok: true, next: pos + 4, value: n, text: String(n) };
+  }
+  if (kind === "uint8"){
+    if (pos + 8 > bytes.length) return { ok: false, reason: "truncated uint8" };
+    v = u64le(bytes, pos);
+    safe = bigToSafe(v);
+    return { ok: true, next: pos + 8, value: safe.ok ? safe.value : v, text: v.toString() };
+  }
+  if (kind === "float8"){
+    if (pos + 8 > bytes.length) return { ok: false, reason: "truncated float8" };
+    var dv = new DataView(bytes.buffer, bytes.byteOffset + pos, 8);
+    var f = dv.getFloat64(0, false);
+    return { ok: true, next: pos + 8, value: f, text: Number.isFinite(f) ? String(f) : String(f) };
+  }
+  if (kind === "long1" || kind === "long4"){
+    var lenBytes = kind === "long1" ? 1 : 4;
+    if (pos + lenBytes > bytes.length) return { ok: false, reason: "truncated long length" };
+    len = kind === "long1" ? bytes[pos] : u32le(bytes, pos);
+    if (!Number.isFinite(len) || len < 0) return { ok: false, reason: "bad long length" };
+    if (pos + lenBytes + len > bytes.length) return { ok: false, reason: "truncated long payload" };
+    var big = decodeLongBytes(bytes, pos + lenBytes, len);
+    return { ok: true, next: pos + lenBytes + len, value: big, text: big.toString() };
+  }
+  if (kind === "str1" || kind === "bytes1" || kind === "uni1"){
+    if (pos + 1 > bytes.length) return { ok: false, reason: "truncated length byte" };
+    len = bytes[pos]; idx = pos + 1;
+  } else if (kind === "str4" || kind === "bytes4" || kind === "uni4"){
+    if (pos + 4 > bytes.length) return { ok: false, reason: "truncated length" };
+    len = u32le(bytes, pos); idx = pos + 4;
+  } else if (kind === "bytes8" || kind === "uni8"){
+    if (pos + 8 > bytes.length) return { ok: false, reason: "truncated length" };
+    var b8 = bigToSafe(u64le(bytes, pos));
+    if (!b8.ok) return { ok: false, reason: "8-byte length " + b8.reason };
+    len = b8.value; idx = pos + 8;
+  } else if (kind === "nl" || kind === "nlquoted" || kind === "nl2"){
+    return readNlArg(bytes, pos, kind);
+  } else {
+    return { ok: false, reason: "unknown argument kind " + kind };
+  }
+
+  if (!Number.isFinite(len) || len < 0) return { ok: false, reason: "bad length" };
+  if (idx + len > bytes.length) return { ok: false, reason: "truncated payload of " + len + " bytes" };
+
+  if (kind === "bytes1" || kind === "bytes4" || kind === "bytes8"){
+    return { ok: true, next: idx + len, value: { kind: "bytes", length: len }, text: len + " bytes" };
+  }
+  if (kind === "str1" || kind === "str4"){
+    s = decodeLatin1(bytes, idx, len);
+    return { ok: true, next: idx + len, value: s, text: "'" + asciiSafe(s, 120) + "'" };
+  }
+  s = decodeUtf8(bytes, idx, len);
+  return { ok: true, next: idx + len, value: s, text: "'" + asciiSafe(s, 120) + "'" };
+}
+
+function readNlArg(bytes, pos, kind){
+  var lines = kind === "nl2" ? 2 : 1;
+  var got = [];
+  var p = pos;
+  for (var k = 0; k < lines; k++){
+    var nl = -1;
+    for (var i = p; i < bytes.length; i++){ if (bytes[i] === 0x0a){ nl = i; break; } }
+    if (nl < 0) return { ok: false, reason: "newline-terminated argument runs off the end" };
+    var raw = decodeLatin1(bytes, p, nl - p);
+    if (raw.length > 0 && raw.charAt(raw.length - 1) === "\r") raw = raw.slice(0, -1);
+    got.push(raw);
+    p = nl + 1;
+  }
+  if (kind === "nl2"){
+    return { ok: true, next: p, value: { module: got[0], name: got[1] },
+             text: "'" + asciiSafe(got[0], 90) + " " + asciiSafe(got[1], 90) + "'" };
+  }
+  if (kind === "nlquoted"){
+    var body = got[0];
+    var q = body.charAt(0);
+    if ((q === "'" || q === '"') && body.length >= 2 && body.charAt(body.length - 1) === q){
+      body = body.slice(1, -1);
+    }
+    var decoded = unescapePyLiteral(body);
+    return { ok: true, next: p, value: decoded, text: "'" + asciiSafe(decoded, 120) + "'" };
+  }
+  return { ok: true, next: p, value: got[0], text: "'" + asciiSafe(got[0], 120) + "'" };
+}
+
+/* ---------- value model ---------- */
+
+function vStr(s, src){ return { t: "str", v: s, src: src || "literal" }; }
+function vGlobal(mod, name, how, off){ return { t: "global", module: mod, name: name, how: how, off: off }; }
+function vOther(t, extra){
+  var o = { t: t };
+  if (extra) for (var k in extra){ if (Object.prototype.hasOwnProperty.call(extra, k)) o[k] = extra[k]; }
+  return o;
+}
+
+function describeValue(v){
+  if (!v) return "?";
+  if (v.t === "str") return "'" + asciiSafe(v.v, 60) + "'";
+  if (v.t === "global") return v.module + "." + v.name;
+  if (v.t === "int" || v.t === "float") return String(v.v);
+  if (v.t === "bool") return v.v ? "True" : "False";
+  if (v.t === "none") return "None";
+  if (v.t === "bytes") return "bytes[" + v.n + "]";
+  if (v.t === "tuple") return "tuple[" + v.n + "]";
+  if (v.t === "list") return "list";
+  if (v.t === "dict") return "dict";
+  if (v.t === "set") return "set";
+  if (v.t === "obj") return "obj<" + (v.callee ? v.callee.module + "." + v.callee.name : "?") + ">";
+  if (v.t === "mark") return "MARK";
+  return v.t;
+}
+
+/* ---------- the disassembler ---------- */
+/*
+  disassemblePickle(bytes, startOffset)
+    -> { ok, ops, imports, calls, start, end, protoDeclared, maxProto,
+         stopped, error, opCount }
+  Never throws. Errors are recorded and the walk stops where it can no longer
+  know how many bytes an opcode consumes.
+*/
+function disassemblePickle(bytes, startOffset){
+  var table = getOpcodeTable();
+  var start = Number.isFinite(startOffset) && startOffset >= 0 ? Math.floor(startOffset) : 0;
+  var pos = start;
+
+  var ops = [];
+  var imports = [];
+  var calls = [];
+  var stack = [];
+  var metastack = [];
+  var memo = Object.create(null);
+  var memoCount = 0;
+  var protoDeclared = -1;
+  var maxProto = 0;
+  var error = null;
+  var stopped = false;
+
+  function push(v){ stack.push(v); }
+  function popOne(where){
+    if (stack.length === 0){ return { ok: false, v: vOther("unknown"), why: where + ": stack underflow" }; }
+    return { ok: true, v: stack.pop(), why: "" };
+  }
+  function popMark(){
+    var items = stack;
+    if (metastack.length === 0){ stack = []; return { ok: false, items: items }; }
+    stack = metastack.pop();
+    return { ok: true, items: items };
+  }
+  function memoSet(key, v){
+    var k = "k" + String(key);
+    if (!Object.prototype.hasOwnProperty.call(memo, k)) memoCount++;
+    memo[k] = v;
+  }
+  function memoGet(key){
+    var k = "k" + String(key);
+    if (Object.prototype.hasOwnProperty.call(memo, k)) return memo[k];
+    return null;
+  }
+  function recordImport(mod, name, how, off, opName){
+    var rec = { module: mod, name: name, how: how, off: off, opcode: opName, called: [] };
+    imports.push(rec);
+    return rec;
+  }
+
+  while (pos < bytes.length){
+    var opOff = pos;
+    var code = bytes[pos];
+    var entry = table[code];
+    if (!entry){
+      error = { off: opOff, message: "unknown opcode byte 0x" + hex2(code) +
+        " - cannot know its argument length, so the walk stops here" };
+      break;
+    }
+    pos += 1;
+    var arg = readArg(bytes, pos, entry.argKind);
+    if (!arg.ok){
+      error = { off: opOff, message: entry.name + ": " + arg.reason };
+      break;
+    }
+    pos = arg.next;
+    if (entry.proto > maxProto) maxProto = entry.proto;
+
+    var op = {
+      off: opOff, code: code, name: entry.name, argText: arg.text,
+      depth: metastack.length, note: "", flag: ""
+    };
+
+    var a, b, c, r, gm, gn, callee, items;
+
+    switch (entry.name){
+      case "PROTO":
+        protoDeclared = arg.value;
+        if (arg.value > maxProto) maxProto = arg.value;
+        break;
+      case "FRAME": break;
+      case "MARK":
+        metastack.push(stack); stack = [];
+        break;
+      case "POP_MARK":
+        r = popMark();
+        if (!r.ok) op.note = "POP_MARK with no MARK on the stack";
+        break;
+      case "STOP":
+        stopped = true;
+        break;
+
+      case "GLOBAL":
+      case "INST":
+        gm = arg.value.module; gn = arg.value.name;
+        if (entry.name === "INST"){
+          r = popMark();
+          if (!r.ok) op.note = "INST with no MARK on the stack";
+          var irec = recordImport(gm, gn, "inline", opOff, entry.name);
+          irec.called.push({ off: opOff, opcode: "INST" });
+          calls.push({ off: opOff, opcode: "INST", callee: { module: gm, name: gn },
+                       argCount: r.items.length, resolved: true });
+          push(vOther("obj", { callee: { module: gm, name: gn } }));
+          op.flag = "call";
+        } else {
+          recordImport(gm, gn, "inline", opOff, "GLOBAL");
+          push(vGlobal(gm, gn, "inline", opOff));
+          op.flag = "import";
+        }
+        break;
+
+      case "STACK_GLOBAL":
+        a = popOne("STACK_GLOBAL name"); b = popOne("STACK_GLOBAL module");
+        if (!a.ok || !b.ok){
+          op.note = "STACK_GLOBAL: stack underflow, cannot resolve";
+          push(vOther("unknown"));
+        } else if (a.v.t === "str" && b.v.t === "str"){
+          var how = (a.v.src === "memo" || b.v.src === "memo") ? "stack+memo" : "stack";
+          recordImport(b.v.v, a.v.v, how, opOff, "STACK_GLOBAL");
+          push(vGlobal(b.v.v, a.v.v, how, opOff));
+          op.flag = "import";
+        } else {
+          op.note = "STACK_GLOBAL operands are " + describeValue(b.v) + " and " + describeValue(a.v) +
+                    ", not two strings, so no import name exists to report";
+          push(vOther("unknown"));
+        }
+        break;
+
+      case "REDUCE":
+        a = popOne("REDUCE args");
+        callee = stack.length > 0 ? stack[stack.length - 1] : null;
+        c = { off: opOff, opcode: "REDUCE",
+              callee: callee && callee.t === "global" ? { module: callee.module, name: callee.name } : null,
+              calleeDesc: describeValue(callee),
+              argCount: a.ok && a.v.t === "tuple" ? a.v.n : -1,
+              resolved: !!(callee && callee.t === "global") };
+        calls.push(c);
+        if (c.resolved){
+          for (var ri = 0; ri < imports.length; ri++){
+            if (imports[ri].module === c.callee.module && imports[ri].name === c.callee.name){
+              imports[ri].called.push({ off: opOff, opcode: "REDUCE" });
+            }
+          }
+        }
+        if (stack.length > 0) stack[stack.length - 1] = vOther("obj", { callee: c.callee });
+        else push(vOther("obj", { callee: c.callee }));
+        op.flag = "call";
+        break;
+
+      case "NEWOBJ":
+      case "NEWOBJ_EX":
+        if (entry.name === "NEWOBJ_EX") popOne("NEWOBJ_EX kwargs");
+        a = popOne("NEWOBJ args");
+        b = popOne("NEWOBJ cls");
+        callee = b.ok ? b.v : null;
+        c = { off: opOff, opcode: entry.name,
+              callee: callee && callee.t === "global" ? { module: callee.module, name: callee.name } : null,
+              calleeDesc: describeValue(callee),
+              argCount: a.ok && a.v.t === "tuple" ? a.v.n : -1,
+              resolved: !!(callee && callee.t === "global") };
+        calls.push(c);
+        if (c.resolved){
+          for (var rj = 0; rj < imports.length; rj++){
+            if (imports[rj].module === c.callee.module && imports[rj].name === c.callee.name){
+              imports[rj].called.push({ off: opOff, opcode: entry.name });
+            }
+          }
+        }
+        push(vOther("obj", { callee: c.callee }));
+        op.flag = "call";
+        break;
+
+      case "BUILD":
+        a = popOne("BUILD state");
+        callee = stack.length > 0 ? stack[stack.length - 1] : null;
+        calls.push({ off: opOff, opcode: "BUILD", callee: null,
+                     calleeDesc: describeValue(callee), argCount: 1, resolved: false });
+        op.flag = "call";
+        break;
+
+      case "OBJ":
+        r = popMark();
+        items = r.items;
+        callee = items.length > 0 ? items[0] : null;
+        calls.push({ off: opOff, opcode: "OBJ",
+                     callee: callee && callee.t === "global" ? { module: callee.module, name: callee.name } : null,
+                     calleeDesc: describeValue(callee), argCount: Math.max(0, items.length - 1),
+                     resolved: !!(callee && callee.t === "global") });
+        push(vOther("obj", { callee: callee && callee.t === "global"
+          ? { module: callee.module, name: callee.name } : null }));
+        op.flag = "call";
+        break;
+
+      case "BINPUT": case "LONG_BINPUT": case "PUT":
+        if (stack.length > 0) memoSet(arg.value, stack[stack.length - 1]);
+        else op.note = "put with an empty stack";
+        break;
+      case "MEMOIZE":
+        if (stack.length > 0) memoSet(memoCount, stack[stack.length - 1]);
+        else op.note = "MEMOIZE with an empty stack";
+        break;
+      case "BINGET": case "LONG_BINGET": case "GET":
+        var got = memoGet(arg.value);
+        if (got === null){ op.note = "memo key " + asciiSafe(String(arg.value), 30) + " was never set"; push(vOther("unknown")); }
+        else if (got.t === "str") push(vStr(got.v, "memo"));
+        else push(got);
+        break;
+
+      case "NONE": push(vOther("none")); break;
+      case "NEWTRUE": push(vOther("bool", { v: true })); break;
+      case "NEWFALSE": push(vOther("bool", { v: false })); break;
+      case "EMPTY_TUPLE": push(vOther("tuple", { n: 0 })); break;
+      case "EMPTY_LIST": push(vOther("list")); break;
+      case "EMPTY_DICT": push(vOther("dict")); break;
+      case "EMPTY_SET": push(vOther("set")); break;
+
+      case "BININT": case "BININT1": case "BININT2":
+        push(vOther("int", { v: arg.value })); break;
+      case "LONG1": case "LONG4":
+        push(vOther("int", { v: arg.value })); break;
+      case "INT": case "LONG":
+        push(vOther("int", { v: arg.value })); break;
+      case "BINFLOAT": case "FLOAT":
+        push(vOther("float", { v: arg.value })); break;
+
+      case "BINUNICODE": case "SHORT_BINUNICODE": case "BINUNICODE8":
+      case "UNICODE": case "STRING": case "BINSTRING": case "SHORT_BINSTRING":
+        push(vStr(arg.value, "literal")); break;
+
+      case "BINBYTES": case "SHORT_BINBYTES": case "BINBYTES8": case "BYTEARRAY8":
+        push(vOther("bytes", { n: arg.value && arg.value.length ? arg.value.length : 0 })); break;
+
+      case "TUPLE1":
+        a = popOne("TUPLE1"); push(vOther("tuple", { n: 1 })); break;
+      case "TUPLE2":
+        popOne("TUPLE2"); popOne("TUPLE2"); push(vOther("tuple", { n: 2 })); break;
+      case "TUPLE3":
+        popOne("TUPLE3"); popOne("TUPLE3"); popOne("TUPLE3"); push(vOther("tuple", { n: 3 })); break;
+      case "TUPLE":
+        r = popMark();
+        if (!r.ok) op.note = "TUPLE with no MARK on the stack";
+        push(vOther("tuple", { n: r.items.length }));
+        break;
+      case "LIST":
+        r = popMark(); if (!r.ok) op.note = "LIST with no MARK on the stack"; push(vOther("list")); break;
+      case "DICT":
+        r = popMark(); if (!r.ok) op.note = "DICT with no MARK on the stack"; push(vOther("dict")); break;
+      case "FROZENSET":
+        r = popMark(); if (!r.ok) op.note = "FROZENSET with no MARK on the stack"; push(vOther("set")); break;
+
+      case "APPEND": popOne("APPEND"); break;
+      case "APPENDS": case "ADDITEMS":
+        r = popMark(); if (!r.ok) op.note = entry.name + " with no MARK on the stack"; break;
+      case "SETITEM": popOne("SETITEM"); popOne("SETITEM"); break;
+      case "SETITEMS":
+        r = popMark(); if (!r.ok) op.note = "SETITEMS with no MARK on the stack"; break;
+
+      case "POP": popOne("POP"); break;
+      case "DUP":
+        if (stack.length > 0) push(stack[stack.length - 1]); else op.note = "DUP with an empty stack";
+        break;
+      case "BINPERSID": popOne("BINPERSID"); push(vOther("obj", { callee: null })); break;
+      case "PERSID": push(vOther("obj", { callee: null })); break;
+      case "EXT1": case "EXT2": case "EXT4":
+        push(vOther("unknown"));
+        op.note = "extension registry object, opcode " + entry.name + ", code " + arg.text;
+        break;
+      case "NEXT_BUFFER": case "READONLY_BUFFER":
+        push(vOther("unknown")); break;
+      default:
+        break;
+    }
+
+    op.stackDepth = stack.length;
+    ops.push(op);
+    if (stopped) break;
+  }
+
+  return {
+    ok: error === null,
+    ops: ops,
+    imports: imports,
+    calls: calls,
+    start: start,
+    end: pos,
+    protoDeclared: protoDeclared,
+    maxProto: maxProto,
+    stopped: stopped,
+    error: error,
+    opCount: ops.length
+  };
+}
+
+/* Walk a byte range that may hold more than one pickle back to back, which is
+   what the legacy torch format and picklescan's multiple_pickles mode expect. */
+function disassembleStream(bytes, maxPickles){
+  var limit = Number.isFinite(maxPickles) && maxPickles > 0 ? Math.floor(maxPickles) : 8;
+  var out = [];
+  var pos = 0;
+  while (pos < bytes.length && out.length < limit){
+    var d = disassemblePickle(bytes, pos);
+    out.push(d);
+    if (!d.stopped) break;
+    if (d.end <= pos) break;
+    pos = d.end;
+    var allPad = true;
+    for (var i = pos; i < bytes.length; i++){ if (bytes[i] !== 0){ allPad = false; break; } }
+    if (allPad) break;
+  }
+  return out;
+}
+
+/* =====================================================================
+   TORCH weights_only PROFILE
+   Transcribed from torch/_weights_only_unpickler.py at tag v2.13.0.
+   Dated vendor data. Displayed in the amber snapshot panel.
+   ===================================================================== */
+function buildTorchProfile(){
+  if (buildTorchProfile.cache) return buildTorchProfile.cache;
+
+  var supported = [
+    "GLOBAL","NEWOBJ","REDUCE","BUILD","APPEND","APPENDS","SETITEM","SETITEMS","MARK",
+    "TUPLE","TUPLE1","TUPLE2","TUPLE3","NONE","NEWFALSE","NEWTRUE","EMPTY_TUPLE",
+    "EMPTY_LIST","EMPTY_DICT","EMPTY_SET","BININT","BININT1","BININT2","BINFLOAT",
+    "BINUNICODE","SHORT_BINSTRING","BINPERSID","BINGET","LONG_BINGET","BINPUT",
+    "LONG_BINPUT","LONG1","PROTO","STOP"
+  ];
+  var table = getOpcodeTable();
+  var byName = Object.create(null);
+  for (var t = 0; t < 256; t++){ if (table[t]) byName[table[t].name] = table[t].code; }
+  var opcodeCodes = Object.create(null);
+  var opcodeRows = [];
+  for (var s = 0; s < supported.length; s++){
+    var nm = supported[s];
+    var cd = Object.prototype.hasOwnProperty.call(byName, nm) ? byName[nm] : -1;
+    opcodeCodes["c" + cd] = true;
+    opcodeRows.push({ name: nm, code: cd });
+  }
+
+  var literal = ["collections.OrderedDict","collections.Counter","torch.nn.parameter.Parameter",
+    "torch.serialization._get_layout","torch.Size","torch.Tensor","torch.device",
+    "_codecs.encode","builtins.bytearray","builtins.set","builtins.complex"];
+
+  var dtypeLegacy = ["float64","float32","float16","int64","int32","int16","int8","uint8","bool",
+    "bfloat16","complex128","complex64","qint8","qint32","quint8","quint4x2","quint2x4"];
+  var dtypeNew = ["float8_e5m2","float8_e4m3fn","float8_e5m2fnuz","float8_e4m3fnuz","float8_e8m0fnu",
+    "float4_e2m1fn_x2","bits8","bits16","bits1x8","bits2x4","bits4x2","complex32",
+    "uint16","uint32","uint64"];
+  var dtypeSub = [];
+  for (var x = 1; x < 8; x++) dtypeSub.push("uint" + x);
+  for (var y = 1; y < 8; y++) dtypeSub.push("int" + y);
+
+  var scalars = ["Byte","Char","Double","Float","Int","Long","Short","Half","Bool","BFloat16"];
+  var backends = [["torch", true], ["torch.cuda", true], ["torch.sparse", false], ["torch.cuda.sparse", false]];
+  var tensorClasses = [];
+  for (var bi = 0; bi < backends.length; bi++){
+    for (var si = 0; si < scalars.length; si++){
+      if (scalars[si] === "Bool" && !backends[bi][1]) continue;
+      tensorClasses.push(backends[bi][0] + "." + scalars[si] + "Tensor");
+    }
+  }
+
+  var legacyStorage = ["Double","Float","Long","Int","Short","Char","Byte","Half","Bool","QUInt8",
+    "QInt8","QInt32","BFloat16","ComplexFloat","ComplexDouble","QUInt4x2","QUInt2x4"];
+  var storageClasses = ["torch.storage.UntypedStorage","torch.storage.TypedStorage"];
+  for (var li = 0; li < legacyStorage.length; li++) storageClasses.push("torch." + legacyStorage[li] + "Storage");
+  /* torch/cuda/__init__.py runs at `import torch` and calls
+     torch._storage_classes.add(...) for twelve more legacy storage classes, so
+     _get_allowed_globals() picks them up on a CPU-only build too. */
+  var cudaStorage = ["Double","Float","Long","Int","Short","Char","Byte","Half","Bool","BFloat16",
+    "ComplexDouble","ComplexFloat"];
+  var cudaStorageClasses = [];
+  for (var ci2 = 0; ci2 < cudaStorage.length; ci2++) cudaStorageClasses.push("torch.cuda." + cudaStorage[ci2] + "Storage");
+
+  var qschemes = ["torch.per_tensor_affine","torch.per_tensor_symmetric","torch.per_channel_affine",
+    "torch.per_channel_symmetric","torch.per_channel_affine_float_qparams"];
+
+  var rebuildNames = ["_rebuild_parameter","_rebuild_parameter_with_state","_rebuild_qtensor",
+    "_rebuild_tensor","_rebuild_tensor_v2","_rebuild_tensor_v3","_rebuild_sparse_tensor",
+    "_rebuild_meta_tensor_no_storage","_rebuild_nested_tensor","_rebuild_wrapper_subclass",
+    "_rebuild_device_tensor_from_numpy","_rebuild_device_tensor_from_cpu_tensor"];
+  var rebuilds = [];
+  for (var rr = 0; rr < rebuildNames.length; rr++) rebuilds.push("torch._utils." + rebuildNames[rr]);
+  rebuilds.push("torch._tensor._rebuild_from_type_v2");
+
+  var families = [
+    { key: "literal", label: "hardcoded entry",
+      note: "written out in the dict literal at the top of _get_allowed_globals()", names: literal },
+    { key: "dtype", label: "dtype",
+      note: "str(t) for t in torch.storage._dtype_to_storage_type_map(); str(dtype) is 'torch.' + the primary name from c10::getDtypeNames",
+      names: dtypeLegacy.map(function(d){ return "torch." + d; }) },
+    { key: "dtype", label: "dtype (untyped-storage era)",
+      note: "str(t) for t in torch.storage._new_dtypes()",
+      names: dtypeNew.map(function(d){ return "torch." + d; }) },
+    { key: "dtype", label: "dtype (sub-byte)",
+      note: "getattr(torch, 'uint'+x) and getattr(torch, 'int'+x) for x in range(1, 8)",
+      names: dtypeSub.map(function(d){ return "torch." + d; }) },
+    { key: "tensor-class", label: "legacy tensor class",
+      note: "torch._tensor_classes, filled by python_tensor.cpp from torch::utils::all_declared_types(), whose backend list is {CPU, CUDA, SparseCPU, SparseCUDA} unconditionally, so the torch.cuda rows exist on a CPU-only build; the two sparse backends skip Bool because 'there is no sparse bool type', giving 4 x 10 - 2 = 38 rows",
+      names: tensorClasses },
+    { key: "storage-class", label: "storage class",
+      note: "torch._storage_classes as declared in torch/__init__.py; the legacy ones are wrapped in serialization.StorageType",
+      names: storageClasses },
+    { key: "storage-class", label: "storage class (torch.cuda)",
+      note: "torch/cuda/__init__.py calls torch._storage_classes.add(...) for these twelve at import time, so they are allowed even on a CPU-only build",
+      names: cudaStorageClasses },
+    { key: "qscheme", label: "quantization scheme",
+      note: "the five qschemes listed inline in _get_allowed_globals()", names: qschemes },
+    { key: "rebuild-fn", label: "tensor rebuild function",
+      note: "_tensor_rebuild_functions() keyed as 'torch._utils.' + f.__name__, plus torch._tensor._rebuild_from_type_v2",
+      names: rebuilds }
+  ];
+
+  var allow = Object.create(null);
+  var rows = [];
+  for (var fi = 0; fi < families.length; fi++){
+    var fam = families[fi];
+    for (var ni = 0; ni < fam.names.length; ni++){
+      var path = fam.names[ni];
+      allow[path] = fam.label;
+      rows.push({ path: path, family: fam.label, note: fam.note });
+    }
+  }
+
+  /* Python 2 to 3 rewrites torch applies to a GLOBAL before any check. */
+  var nameMapping = Object.create(null);
+  var nmPairs = [
+    ["__builtin__","xrange","builtins","range"],
+    ["__builtin__","reduce","functools","reduce"],
+    ["__builtin__","intern","sys","intern"],
+    ["__builtin__","unichr","builtins","chr"],
+    ["__builtin__","unicode","builtins","str"],
+    ["__builtin__","long","builtins","int"],
+    ["itertools","izip","builtins","zip"],
+    ["itertools","imap","builtins","map"],
+    ["itertools","ifilter","builtins","filter"],
+    ["itertools","ifilterfalse","itertools","filterfalse"],
+    ["itertools","izip_longest","itertools","zip_longest"],
+    ["UserDict","IterableUserDict","collections","UserDict"],
+    ["UserList","UserList","collections","UserList"],
+    ["UserString","UserString","collections","UserString"],
+    ["__builtin__","basestring","builtins","str"],
+    ["exceptions","StandardError","builtins","Exception"],
+    ["UserDict","UserDict","collections","UserDict"]
+  ];
+  for (var np = 0; np < nmPairs.length; np++){
+    var pr = nmPairs[np];
+    if (!Object.prototype.hasOwnProperty.call(nameMapping, pr[0])) nameMapping[pr[0]] = Object.create(null);
+    nameMapping[pr[0]][pr[1]] = { module: pr[2], name: pr[3] };
+  }
+  var importMapping = Object.create(null);
+  var imPairs = [["__builtin__","builtins"],["copy_reg","copyreg"],["Queue","queue"],
+    ["repr","reprlib"],["_abcoll","collections.abc"],["UserDict","collections"],
+    ["UserList","collections"],["UserString","collections"],["whichdb","dbm"],
+    ["StringIO","io"],["cStringIO","io"]];
+  for (var ip = 0; ip < imPairs.length; ip++) importMapping[imPairs[ip][0]] = imPairs[ip][1];
+
+  var blocklist = ["sys","os","posix","nt"];
+  var blockSet = Object.create(null);
+  for (var bl = 0; bl < blocklist.length; bl++) blockSet[blocklist[bl]] = true;
+
+  var needsImportNjt = ["torch.nested._internal.nested_tensor.NestedTensor",
+    "torch.nested._internal.nested_tensor._rebuild_njt","torch._dynamo.decorators._DimRange"];
+  var needsImportDt = ["torch.distributed.device_mesh.DeviceMesh",
+    "torch.distributed.tensor._dtensor_spec.DTensorSpec",
+    "torch.distributed.tensor._dtensor_spec.TensorMeta",
+    "torch.distributed.tensor.DTensor",
+    "torch.distributed.tensor.placement_types.Partial",
+    "torch.distributed.tensor.placement_types.Replicate",
+    "torch.distributed.tensor.placement_types.Shard"];
+  var njtSet = Object.create(null);
+  for (var n1 = 0; n1 < needsImportNjt.length; n1++) njtSet[needsImportNjt[n1]] = true;
+  var dtSet = Object.create(null);
+  for (var d1 = 0; d1 < needsImportDt.length; d1++) dtSet[needsImportDt[d1]] = true;
+
+  var profile = {
+    version: "2.13.0",
+    tag: "v2.13.0",
+    tagReleased: "2026-07-08",
+    transcribed: "2026-08-09",
+    sourceUrl: "https://github.com/pytorch/pytorch/blob/v2.13.0/torch/_weights_only_unpickler.py",
+    opcodeNames: supported,
+    opcodeRows: opcodeRows,
+    opcodeCodes: opcodeCodes,
+    allow: allow,
+    allowRows: rows,
+    families: families,
+    nameMapping: nameMapping,
+    importMapping: importMapping,
+    blocklist: blocklist,
+    blockSet: blockSet,
+    njtSet: njtSet,
+    dtSet: dtSet
+  };
+  buildTorchProfile.cache = profile;
+  return profile;
+}
+
+/* torch/_weights_only_unpickler.py::_read_global_instruction */
+function applyTorchNameMapping(profile, module, name){
+  if (Object.prototype.hasOwnProperty.call(profile.nameMapping, module)){
+    var byName = profile.nameMapping[module];
+    if (Object.prototype.hasOwnProperty.call(byName, name)){
+      var m = byName[name];
+      return { module: m.module, name: m.name, rewritten: true };
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(profile.importMapping, module)){
+    return { module: profile.importMapping[module], name: name, rewritten: true };
+  }
+  return { module: module, name: name, rewritten: false };
+}
+
+/* torch strips a leading "builtins" from the path it echoes in the error. */
+function torchErrorPath(fullPath){
+  var prefix = "builtins";
+  if (fullPath.indexOf(prefix) >= 0 && fullPath.slice(0, prefix.length) === prefix){
+    var rest = fullPath.slice(prefix.length);
+    if (rest.length > 0 && rest.charAt(0) === ".") return rest.slice(1);
+    return prefix + rest;
+  }
+  return fullPath;
+}
+
+function isAllowedGlobal(profile, fullPath, extraSet){
+  if (extraSet && Object.prototype.hasOwnProperty.call(extraSet, fullPath)) return "add_safe_globals";
+  if (Object.prototype.hasOwnProperty.call(profile.allow, fullPath)) return profile.allow[fullPath];
+  return "";
+}
+
+function makeExtraSet(lines){
+  var set = Object.create(null);
+  if (!lines) return set;
+  var arr = Array.isArray(lines) ? lines : String(lines).split("\n");
+  for (var i = 0; i < arr.length; i++){
+    var v = String(arr[i]).trim();
+    if (v.length > 0) set[v] = true;
+  }
+  return set;
+}
+
+/*
+  evaluateWeightsOnly(disasm, profile, extraSet)
+    -> { status: "reject" | "no-blocker" | "undecided",
+         first, blockers[], notes[], globals[] }
+  Mirrors the order of checks in torch's Unpickler.load(): the opcode gate fires
+  first because torch reads the opcode byte before it can look at anything else.
+*/
+function evaluateWeightsOnly(disasm, profile, extraSet){
+  var blockers = [];
+  var notes = [];
+  var globals = [];
+  var stoppedAt = -1;
+  var BLOCKER_CAP = 60;
+  var blockerOverflow = 0;
+  function addBlocker(b){
+    if (blockers.length < BLOCKER_CAP) blockers.push(b);
+    else blockerOverflow++;
+  }
+
+  for (var i = 0; i < disasm.ops.length; i++){
+    var op = disasm.ops[i];
+    if (!Object.prototype.hasOwnProperty.call(profile.opcodeCodes, "c" + op.code)){
+      addBlocker({
+        kind: "opcode", off: op.off, opcode: op.name,
+        message: "UnpicklingError: Unsupported operand " + op.code,
+        detail: "The weights_only unpickler implements " + profile.opcodeNames.length +
+                " opcodes and " + op.name + " is not one of them."
+      });
+      if (stoppedAt < 0) stoppedAt = i;
+      continue;
+    }
+    if (op.name !== "GLOBAL") continue;
+
+    var raw = op.argText;
+    var found = null;
+    for (var g = 0; g < disasm.imports.length; g++){
+      if (disasm.imports[g].off === op.off && disasm.imports[g].opcode === "GLOBAL"){
+        found = disasm.imports[g]; break;
+      }
+    }
+    if (!found){ notes.push({ off: op.off, message: "GLOBAL at " + op.off + " could not be read: " + asciiSafe(raw, 60) }); continue; }
+
+    var mapped = applyTorchNameMapping(profile, found.module, found.name);
+    var full = mapped.module + "." + mapped.name;
+    var rec = { off: op.off, module: mapped.module, name: mapped.name, full: full,
+                rewrittenFrom: mapped.rewritten ? (found.module + "." + found.name) : "",
+                status: "", family: "" };
+
+    if (Object.prototype.hasOwnProperty.call(profile.blockSet, mapped.module)){
+      rec.status = "blocked-module";
+      addBlocker({ kind: "global", off: op.off, opcode: "GLOBAL",
+        message: "UnpicklingError: Trying to load unsupported GLOBAL " + asciiSafe(full, 120) +
+                 " whose module " + asciiSafe(mapped.module, 80) + " is blocked.",
+        detail: "Module " + asciiSafe(mapped.module, 80) +
+                " is in _blocklisted_modules and cannot be re-allowed with add_safe_globals." });
+      if (stoppedAt < 0) stoppedAt = i;
+    } else {
+      var fam = isAllowedGlobal(profile, full, extraSet);
+      if (fam){
+        rec.status = "allowed"; rec.family = fam;
+      } else if (Object.prototype.hasOwnProperty.call(profile.njtSet, full)){
+        rec.status = "needs-import";
+        addBlocker({ kind: "global", off: op.off, opcode: "GLOBAL",
+          message: "UnpicklingError: ``torch.nested`` and ``torch._dynamo`` must be imported to load nested jagged tensors (NJTs)",
+          detail: "Allowed only once those modules are imported in the loading process." });
+        if (stoppedAt < 0) stoppedAt = i;
+      } else if (Object.prototype.hasOwnProperty.call(profile.dtSet, full)){
+        rec.status = "needs-import";
+        addBlocker({ kind: "global", off: op.off, opcode: "GLOBAL",
+          message: "UnpicklingError: ``torch.distributed.tensor`` must be imported to load DTensors",
+          detail: "Allowed only once torch.distributed.tensor is imported in the loading process." });
+        if (stoppedAt < 0) stoppedAt = i;
+      } else {
+        rec.status = "not-allowed";
+        var shown = asciiSafe(torchErrorPath(full), 120);
+        addBlocker({ kind: "global", off: op.off, opcode: "GLOBAL",
+          message: "UnpicklingError: Unsupported global: GLOBAL " + shown +
+                   " was not an allowed global by default.",
+          detail: "torch suggests torch.serialization.add_safe_globals([" + shown + "]) if you trust it." });
+        if (stoppedAt < 0) stoppedAt = i;
+      }
+    }
+    globals.push(rec);
+  }
+
+  /* REDUCE and NEWOBJ callee checks, only where the callee is modelled. */
+  for (var ci = 0; ci < disasm.calls.length; ci++){
+    var call = disasm.calls[ci];
+    if (call.opcode !== "REDUCE" && call.opcode !== "NEWOBJ") continue;
+    if (call.resolved) continue;
+    if (call.calleeDesc === "?" || call.calleeDesc.indexOf("obj<") === 0 || call.calleeDesc === "unknown"){
+      notes.push({ off: call.off, message: call.opcode + " at offset " + call.off +
+        " has a callee this reader could not resolve (" + asciiSafe(call.calleeDesc, 40) +
+        "), so torch's callee check is not evaluated here." });
+    }
+  }
+
+  var status;
+  if (!disasm.ok || (!disasm.stopped && disasm.ops.length > 0)){
+    status = blockers.length > 0 ? "reject" : "undecided";
+  } else {
+    status = blockers.length > 0 ? "reject" : "no-blocker";
+  }
+
+  return {
+    status: status,
+    blockerOverflow: blockerOverflow,
+    first: blockers.length > 0 ? blockers[0] : null,
+    blockers: blockers,
+    notes: notes,
+    globals: globals,
+    stoppedAt: stoppedAt
+  };
+}
+
+/* =====================================================================
+   PICKLESCAN REGRESSION MODEL
+   Reimplementation of picklescan's _list_globals STACK_GLOBAL branch, in both
+   the pre-0.0.27 and post-0.0.27 forms, from the published source.
+   ===================================================================== */
+function picklescanStackGlobal(opsList, variant){
+  var skipPut = { MEMOIZE: 1, PUT: 1, BINPUT: 1, LONG_BINPUT: 1 };
+  var getOps = { GET: 1, BINGET: 1, LONG_BINGET: 1 };
+  /* 0.0.27 changed two things in the same release: range(1, n) became
+     range(1, n + 1), and STRING, BINSTRING and SHORT_BINSTRING were added to
+     the list of opcodes treated as string operands. Modelling only the range
+     would misreport what the vulnerable version did. */
+  var strOpsPre = { SHORT_BINUNICODE: 1, UNICODE: 1, BINUNICODE: 1, BINUNICODE8: 1 };
+  var strOpsPost = { SHORT_BINUNICODE: 1, UNICODE: 1, BINUNICODE: 1, BINUNICODE8: 1,
+                     STRING: 1, BINSTRING: 1, SHORT_BINSTRING: 1 };
+  var isPre = variant === "pre-0.0.27";
+  var strOps = isPre ? strOpsPre : strOpsPost;
+  function has(map, k){ return Object.prototype.hasOwnProperty.call(map, k); }
+
+  var memo = Object.create(null);
+  var memoLen = 0;
+  var found = [];
+  for (var n = 0; n < opsList.length; n++){
+    var op = opsList[n];
+    if (op.name === "MEMOIZE" && n > 0){
+      var pk = "k" + memoLen;
+      if (!has(memo, pk)) memoLen++;
+      memo[pk] = opsList[n - 1].value;
+    } else if ((op.name === "PUT" || op.name === "BINPUT" || op.name === "LONG_BINPUT") && n > 0){
+      memo["k" + String(op.value)] = opsList[n - 1].value;
+    } else if (op.name === "GLOBAL" || op.name === "INST"){
+      var parts = String(op.value).split(" ");
+      found.push([parts[0], parts.slice(1).join(" ")]);
+    } else if (op.name === "STACK_GLOBAL"){
+      var values = [];
+      var last = isPre ? n - 1 : n;
+      for (var offset = 1; offset <= last; offset++){
+        var prev = opsList[n - offset];
+        if (has(skipPut, prev.name)) continue;
+        if (has(getOps, prev.name)){
+          var mk = "k" + String(prev.value);
+          values.push(has(memo, mk) ? String(memo[mk]) : "unknown");
+        } else if (!has(strOps, prev.name)){
+          values.push("unknown");
+        } else {
+          values.push(String(prev.value));
+        }
+        if (values.length === 2) break;
+      }
+      if (values.length !== 2){
+        return { ok: false, raised: true,
+          error: "ValueError: Found " + values.length + " values for STACK_GLOBAL at position " +
+                 n + " instead of 2.",
+          globals: found };
+      }
+      found.push([values[1], values[0]]);
+    }
+  }
+  return { ok: true, raised: false, error: "", globals: found };
+}
+
+/* Turn a disassembly into the (name, value) op list picklescan sees from
+   pickletools.genops, so the reimplementation above can be run on it. */
+function opsForPicklescan(disasm, bytes){
+  var out = [];
+  var table = getOpcodeTable();
+  for (var i = 0; i < disasm.ops.length; i++){
+    var op = disasm.ops[i];
+    var entry = table[op.code];
+    var value = null;
+    if (entry){
+      var a = readArg(bytes, op.off + 1, entry.argKind);
+      if (a.ok){
+        if (entry.argKind === "nl2" && a.value) value = a.value.module + " " + a.value.name;
+        else if (a.value && a.value.kind === "bytes") value = null;
+        else value = a.value;
+      }
+    }
+    out.push({ name: op.name, value: value, off: op.off });
+  }
+  return out;
+}
+
+/* =====================================================================
+   CONTAINER DETECTION AND ZIP READING
+   ===================================================================== */
+
+/* torch/serialization.py: MAGIC_NUMBER = 0x1950A86A20F9469CFC6C, dumped with
+   pickle protocol 2, which is PROTO 2, LONG1 of length 10, little-endian. */
+function legacyTorchPrefix(){
+  return [0x80, 0x02, 0x8a, 0x0a, 0x6c, 0xfc, 0x9c, 0x46, 0xf9, 0x20, 0x6a, 0xa8, 0x50, 0x19];
+}
+
+function detectContainer(head){
+  if (!head || head.length === 0) return { kind: "empty", label: "empty file", refuse: true,
+    reason: "The file has no bytes." };
+
+  if (head.length >= 4 && head[0] === 0x50 && head[1] === 0x4b && head[2] === 0x03 && head[3] === 0x04){
+    return { kind: "zip", label: "ZIP archive",
+      reason: "First four bytes are the ZIP local file header magic, which is exactly the test torch/serialization.py::_is_zipfile applies." };
+  }
+
+  var pref = legacyTorchPrefix();
+  if (head.length >= pref.length){
+    var match = true;
+    for (var i = 0; i < pref.length; i++){ if (head[i] !== pref[i]){ match = false; break; } }
+    if (match) return { kind: "legacy-torch", label: "legacy non-ZIP torch.save format", refuse: true,
+      reason: "The first record is a protocol 2 pickle of MAGIC_NUMBER 0x1950A86A20F9469CFC6C, which is the layout torch writes with _use_new_zipfile_serialization=False. This tool refuses it rather than half-parsing it: the storage records that follow are laid out by torch's own reader, not by the pickle, and guessing would be worse than saying no." };
+  }
+
+  if (head.length >= 262){
+    var ustar = true;
+    var mag = [0x75, 0x73, 0x74, 0x61, 0x72];
+    for (var u = 0; u < 5; u++){ if (head[257 + u] !== mag[u]){ ustar = false; break; } }
+    if (ustar) return { kind: "legacy-tar", label: "tar archive (very old torch.save)", refuse: true,
+      reason: "The ustar marker sits at offset 257. Torch's legacy_load tries a tar reader on this shape. This tool refuses it rather than mis-parsing it." };
+  }
+
+  if (head.length >= 9 && head[8] === 0x7b){
+    var hdr = bigToSafe(u64le(head, 0));
+    if (hdr.ok && hdr.value > 1 && hdr.value < 100000000){
+      return { kind: "safetensors", label: "looks like safetensors", refuse: true,
+        reason: "The first eight bytes read as a little-endian length and byte 8 is '{', which is the safetensors layout. There is no pickle in a safetensors file, which is the entire point of the format. Nothing here to disassemble." };
+    }
+  }
+
+  if (head[0] === 0x80) return { kind: "pickle", label: "bare pickle, protocol 2 or later",
+    reason: "Starts with the PROTO opcode." };
+
+  var t = getOpcodeTable();
+  if (t[head[0]]) return { kind: "pickle", label: "bare pickle, protocol 0 or 1",
+    reason: "No PROTO opcode, but the first byte is the valid opcode " + t[head[0]].name +
+            ". Note that in this shape op index 0 carries real data, which is the ground the CVE-2025-71325 off-by-one stood on." };
+
+  return { kind: "unknown", label: "unrecognised", refuse: true,
+    reason: "First byte 0x" + hex2(head[0]) + " is neither a ZIP header nor a valid pickle opcode." };
+}
+
+/* Scan a tail buffer backwards for the end-of-central-directory record.
+   tailStart is the absolute file offset of tail[0]. */
+function findEocd(tail, tailStart, fileSize){
+  if (!tail || tail.length < 22) return { ok: false, reason: "file is smaller than an end-of-central-directory record" };
+  for (var i = tail.length - 22; i >= 0; i--){
+    if (tail[i] !== 0x50 || tail[i + 1] !== 0x4b || tail[i + 2] !== 0x05 || tail[i + 3] !== 0x06) continue;
+    var commentLen = u16le(tail, i + 20);
+    if (i + 22 + commentLen !== tail.length) continue;
+    var totalEntries = u16le(tail, i + 10);
+    var cdSize = u32le(tail, i + 12);
+    var cdOffset = u32le(tail, i + 16);
+    var needsZip64 = (totalEntries === 0xffff) || (cdSize === 0xffffffff) || (cdOffset === 0xffffffff);
+    return { ok: true, eocdRel: i, eocdAbs: tailStart + i, totalEntries: totalEntries,
+             cdSize: cdSize, cdOffset: cdOffset, commentLen: commentLen, needsZip64: needsZip64,
+             fileSize: fileSize };
+  }
+  return { ok: false, reason: "no end-of-central-directory signature in the last " + tail.length + " bytes" };
+}
+
+/* ZIP64 end-of-central-directory locator sits immediately before the EOCD. */
+function findZip64Locator(tail, tailStart, eocdRel){
+  var rel = eocdRel - 20;
+  if (rel < 0) return { ok: false, reason: "no room for a ZIP64 locator before the end-of-central-directory record" };
+  if (tail[rel] !== 0x50 || tail[rel + 1] !== 0x4b || tail[rel + 2] !== 0x06 || tail[rel + 3] !== 0x07){
+    return { ok: false, reason: "ZIP64 locator signature not found where it must be" };
+  }
+  var off = bigToSafe(u64le(tail, rel + 8));
+  if (!off.ok) return { ok: false, reason: "ZIP64 record offset " + off.reason };
+  return { ok: true, zip64EocdOffset: off.value };
+}
+
+function parseZip64Eocd(buf){
+  if (!buf || buf.length < 56) return { ok: false, reason: "ZIP64 end-of-central-directory record is short" };
+  if (buf[0] !== 0x50 || buf[1] !== 0x4b || buf[2] !== 0x06 || buf[3] !== 0x06){
+    return { ok: false, reason: "ZIP64 end-of-central-directory signature missing" };
+  }
+  var entries = bigToSafe(u64le(buf, 32));
+  var size = bigToSafe(u64le(buf, 40));
+  var offset = bigToSafe(u64le(buf, 48));
+  if (!entries.ok) return { ok: false, reason: "ZIP64 entry count " + entries.reason };
+  if (!size.ok) return { ok: false, reason: "ZIP64 central directory size " + size.reason };
+  if (!offset.ok) return { ok: false, reason: "ZIP64 central directory offset " + offset.reason };
+  return { ok: true, totalEntries: entries.value, cdSize: size.value, cdOffset: offset.value };
+}
+
+/* Read the 0x0001 extended information extra field, honouring the rule that
+   only the fields whose 32-bit slot held a sentinel are actually present. */
+function readZip64Extra(extra, wantUncomp, wantComp, wantOffset){
+  var out = { uncompSize: -1, compSize: -1, localOffset: -1, ok: true, reason: "" };
+  var p = 0;
+  while (p + 4 <= extra.length){
+    var id = u16le(extra, p);
+    var size = u16le(extra, p + 2);
+    var body = p + 4;
+    if (body + size > extra.length) break;
+    if (id === 0x0001){
+      var q = body;
+      if (wantUncomp && q + 8 <= body + size){ var a = bigToSafe(u64le(extra, q)); if (!a.ok){ out.ok = false; out.reason = "uncompressed size " + a.reason; return out; } out.uncompSize = a.value; q += 8; }
+      if (wantComp && q + 8 <= body + size){ var b = bigToSafe(u64le(extra, q)); if (!b.ok){ out.ok = false; out.reason = "compressed size " + b.reason; return out; } out.compSize = b.value; q += 8; }
+      if (wantOffset && q + 8 <= body + size){ var c = bigToSafe(u64le(extra, q)); if (!c.ok){ out.ok = false; out.reason = "local header offset " + c.reason; return out; } out.localOffset = c.value; q += 8; }
+      return out;
+    }
+    p = body + size;
+  }
+  return out;
+}
+
+function parseCentralDirectory(cd){
+  var entries = [];
+  var off = 0;
+  var warnings = [];
+  while (off + 46 <= cd.length){
+    if (cd[off] !== 0x50 || cd[off + 1] !== 0x4b || cd[off + 2] !== 0x01 || cd[off + 3] !== 0x02){
+      warnings.push("central directory header signature missing at byte " + off + ", stopping");
+      break;
+    }
+    var flags = u16le(cd, off + 8);
+    var method = u16le(cd, off + 10);
+    var crc = u32le(cd, off + 16);
+    var compSize = u32le(cd, off + 20);
+    var uncompSize = u32le(cd, off + 24);
+    var nameLen = u16le(cd, off + 28);
+    var extraLen = u16le(cd, off + 30);
+    var commentLen = u16le(cd, off + 32);
+    var localOffset = u32le(cd, off + 42);
+    var nameStart = off + 46;
+    if (nameStart + nameLen + extraLen + commentLen > cd.length){
+      warnings.push("central directory entry runs past the end of the directory, stopping");
+      break;
+    }
+    var name = (flags & 0x0800) ? decodeUtf8(cd, nameStart, nameLen) : decodeLatin1(cd, nameStart, nameLen);
+    var extra = cd.subarray(nameStart + nameLen, nameStart + nameLen + extraLen);
+    var z = readZip64Extra(extra, uncompSize === 0xffffffff, compSize === 0xffffffff, localOffset === 0xffffffff);
+    if (!z.ok) warnings.push("entry " + asciiSafe(name, 60) + ": " + z.reason);
+    if (uncompSize === 0xffffffff && z.uncompSize >= 0) uncompSize = z.uncompSize;
+    if (compSize === 0xffffffff && z.compSize >= 0) compSize = z.compSize;
+    if (localOffset === 0xffffffff && z.localOffset >= 0) localOffset = z.localOffset;
+
+    entries.push({
+      name: name, method: method, flags: flags, crc: crc >>> 0,
+      compSize: compSize, uncompSize: uncompSize, localOffset: localOffset,
+      zip64: extraLen > 0 && (z.uncompSize >= 0 || z.compSize >= 0 || z.localOffset >= 0)
+    });
+    off = nameStart + nameLen + extraLen + commentLen;
+  }
+  return { ok: true, entries: entries, warnings: warnings };
+}
+
+function localHeaderDataStart(lh){
+  if (!lh || lh.length < 30) return { ok: false, reason: "local file header is short" };
+  if (lh[0] !== 0x50 || lh[1] !== 0x4b || lh[2] !== 0x03 || lh[3] !== 0x04){
+    return { ok: false, reason: "local file header signature missing" };
+  }
+  var nameLen = u16le(lh, 26);
+  var extraLen = u16le(lh, 28);
+  return { ok: true, dataRelative: 30 + nameLen + extraLen, nameLen: nameLen, extraLen: extraLen };
+}
+
+/* A TorchScript archive written by torch.jit.save carries data.pkl,
+   constants.pkl, callstack_debug_map.pkl and one code/<name>.py.debug_pkl per
+   source file. The debug records are pickles too, so the suffix test has to
+   cover them or "every pickle in the archive" is not true. */
+function isPickleMember(name){
+  var n = String(name).toLowerCase();
+  if (n.length >= 10 && n.slice(-10) === ".debug_pkl") return true;
+  return n.length >= 4 && n.slice(-4) === ".pkl";
+}
+
+function crc32(bytes){
+  if (!crc32.table){
+    var t = new Int32Array(256);
+    for (var i = 0; i < 256; i++){
+      var c = i;
+      for (var k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+      t[i] = c;
+    }
+    crc32.table = t;
+  }
+  var tab = crc32.table;
+  var crc = -1;
+  for (var j = 0; j < bytes.length; j++) crc = (crc >>> 8) ^ tab[(crc ^ bytes[j]) & 0xff];
+  return (crc ^ -1) >>> 0;
+}
+
+/* =====================================================================
+   END OF PURE CORE. Everything below touches the DOM.
+   ===================================================================== */
+
+(function(){
+  var THEME_KEY = "mps-theme";
+  var root = document.documentElement;
+  var themeBtn = document.getElementById("btn-theme");
+  var themeLabel = document.getElementById("theme-label");
+
+  function applyTheme(mode){
+    if (mode === "light" || mode === "dark"){ root.setAttribute("data-theme", mode); }
+    else { root.setAttribute("data-theme", "dark"); mode = "dark"; }
+    themeLabel.textContent = mode === "dark" ? "Light mode" : "Dark mode";
+    themeBtn.setAttribute("aria-pressed", mode === "light" ? "true" : "false");
+    themeBtn.setAttribute("aria-label", mode === "dark" ? "Switch to light mode" : "Switch to dark mode");
+  }
+  /* Restore at load, not only in the click handler. */
+  var saved = null;
+  try { saved = window.localStorage.getItem(THEME_KEY); } catch (e) { saved = null; }
+  applyTheme(saved === "light" ? "light" : "dark");
+  themeBtn.addEventListener("click", function(){
+    var next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+    applyTheme(next);
+    try { window.localStorage.setItem(THEME_KEY, next); } catch (e) { /* private mode */ }
+  });
+
+  var PROFILE = buildTorchProfile();
+  var state = { source: null, streams: [], container: null, members: [], notes: [] };
+
+  function $(id){ return document.getElementById(id); }
+  function html(el, s){ el.innerHTML = s; }
+
+  function copyButton(label, getText){
+    var b = document.createElement("button");
+    b.type = "button";
+    b.className = "btn small copy";
+    b.textContent = label;
+    b.addEventListener("click", function(){
+      var text = getText();
+      var done = function(){
+        var old = b.textContent;
+        b.textContent = "Copied";
+        window.setTimeout(function(){ b.textContent = old; }, 1400);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText){
+        navigator.clipboard.writeText(text).then(done, function(){ fallbackCopy(text, done, b); });
+      } else fallbackCopy(text, done, b);
+    });
+    return b;
+  }
+  function fallbackCopy(text, done, b){
+    try {
+      var ta = document.createElement("textarea");
+      ta.value = text; ta.setAttribute("readonly", "readonly");
+      ta.style.position = "fixed"; ta.style.top = "-1000px";
+      document.body.appendChild(ta); ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+      done();
+    } catch (e){
+      b.textContent = "Copy failed";
+      window.setTimeout(function(){ b.textContent = "Copy"; }, 1600);
+    }
+  }
+
+  /* ---------- reference snapshot rendering ---------- */
+  function renderReference(){
+    $("ref-tag").textContent = PROFILE.tag;
+    $("ref-date").textContent = PROFILE.tagReleased;
+    $("ref-transcribed").textContent = PROFILE.transcribed;
+    $("snap-badge").textContent = "torch " + PROFILE.tag + " snapshot, " + PROFILE.transcribed;
+
+    var rows = PROFILE.opcodeRows.slice().sort(function(a, b){ return a.code - b.code; });
+    var s = '<table><thead><tr><th>byte</th><th>opcode</th><th>byte</th><th>opcode</th><th>byte</th><th>opcode</th></tr></thead><tbody>';
+    for (var i = 0; i < rows.length; i += 3){
+      s += "<tr>";
+      for (var k = 0; k < 3; k++){
+        var r = rows[i + k];
+        if (r) s += '<td class="num">0x' + hex2(r.code) + '</td><td class="m">' + escapeHtml(r.name) + "</td>";
+        else s += "<td></td><td></td>";
+      }
+      s += "</tr>";
+    }
+    s += "</tbody></table>";
+    html($("ref-opcodes"), s);
+
+    var bl = "";
+    for (var b = 0; b < PROFILE.blocklist.length; b++){
+      bl += '<span class="badge bad">' + escapeHtml(PROFILE.blocklist[b]) + "</span>";
+    }
+    html($("ref-blocklist"), bl);
+
+    renderAllowTable("");
+    $("allow-filter").addEventListener("input", function(){ renderAllowTable(this.value); });
+  }
+
+  function renderAllowTable(filter){
+    var f = String(filter || "").trim().toLowerCase();
+    var body = $("allow-table").getElementsByTagName("tbody")[0];
+    var rows = PROFILE.allowRows;
+    var out = "";
+    var shown = 0;
+    for (var i = 0; i < rows.length; i++){
+      var r = rows[i];
+      if (f && r.path.toLowerCase().indexOf(f) < 0 && r.family.toLowerCase().indexOf(f) < 0) continue;
+      shown++;
+      out += "<tr><td class=\"m\">" + escapeHtml(r.path) + "</td><td>" + escapeHtml(r.family) +
+             '</td><td class="tiny">' + escapeHtml(r.note) + "</td></tr>";
+    }
+    if (shown === 0) out = '<tr><td colspan="3" class="dim">No entry matches that filter.</td></tr>';
+    html(body, out);
+    $("allow-count").textContent = shown + " of " + rows.length + " entries";
+  }
+
+  /* ---------- sample fixtures ---------- */
+  function bytesFromLatin1(s){
+    var a = new Uint8Array(s.length);
+    for (var i = 0; i < s.length; i++) a[i] = s.charCodeAt(i) & 0xff;
+    return a;
+  }
+
+  var FIXTURES = {
+    cve: {
+      label: "CVE-2025-71325 proof of concept",
+      file: "cve-2025-71325.pkl",
+      note: "The exact 26-byte payload from GHSA-9gvj-pp9x-gcfr.",
+      bytes: function(){ return bytesFromLatin1("S'os'\nS'system'\n\x93S'ls'\n\x85R."); }
+    },
+    benign: {
+      label: "Benign state_dict (protocol 2)",
+      file: "benign-state-dict.pkl",
+      note: "Shaped the way torch.save writes a one-tensor state_dict.",
+      bytes: function(){
+        return bytesFromLatin1(
+          "\x80\x02}q\x00X\x0c\x00\x00\x00layer.weightq\x01" +
+          "ctorch._utils\n_rebuild_tensor_v2\nq\x02((" +
+          "X\x07\x00\x00\x00storageq\x03ctorch\nFloatStorage\nq\x04" +
+          "X\x01\x00\x00\x000q\x05X\x03\x00\x00\x00cpuq\x06K\x04tq\x07Q" +
+          "K\x00K\x04\x85q\x08K\x01\x85q\x09\x89" +
+          "ccollections\nOrderedDict\nq\x0a)Rq\x0btq\x0cRq\x0ds.");
+      }
+    },
+    proto4: {
+      label: "Protocol 4, allowlisted import only",
+      file: "protocol4-ordereddict.pkl",
+      note: "collections.OrderedDict is on the allowlist, yet torch still refuses this file. Opcodes, not imports.",
+      bytes: function(){
+        return bytesFromLatin1(
+          "\x80\x04\x95\x22\x00\x00\x00\x00\x00\x00\x00" +
+          "\x8c\x0bcollections\x94\x8c\x0bOrderedDict\x94\x93\x94)R\x94.");
+      }
+    },
+    posix: {
+      label: "posix.system via GLOBAL",
+      file: "posix-system.pkl",
+      note: "The classic shape. Blocked by module, not by name.",
+      bytes: function(){
+        return bytesFromLatin1(
+          "\x80\x02cposix\nsystem\nq\x00X\x15\x00\x00\x00echo pwned > /tmp/pwnq\x01\x85q\x02Rq\x03.");
+      }
+    },
+    exec: {
+      label: "builtins.exec via STACK_GLOBAL",
+      file: "builtins-exec.pkl",
+      note: "Module and name are two separate stack pushes. A text scan finds no import here.",
+      bytes: function(){
+        return bytesFromLatin1(
+          "\x80\x04\x95\x28\x00\x00\x00\x00\x00\x00\x00" +
+          "\x8c\x08builtins\x94\x8c\x04exec\x94\x93\x94\x8c\x0cprint(1 + 1)\x94\x85\x94R\x94.");
+      }
+    },
+    proto: {
+      label: "Import named __proto__",
+      file: "prototype-names.pkl",
+      note: "An import of constructor.__proto__. A lookup map with a prototype would lose or mangle this.",
+      bytes: function(){
+        return bytesFromLatin1(
+          "\x80\x04\x95\x20\x00\x00\x00\x00\x00\x00\x00" +
+          "\x8c\x0bconstructor\x94\x8c\x09__proto__\x94\x93\x94)R\x94.");
+      }
+    },
+    legacy: {
+      label: "Legacy non-ZIP torch.save",
+      file: "legacy-format.pt",
+      note: "Refused on purpose. See section 8.",
+      bytes: function(){
+        var p = legacyTorchPrefix();
+        var a = new Uint8Array(p.length + 1);
+        for (var i = 0; i < p.length; i++) a[i] = p[i];
+        a[p.length] = 0x2e;
+        return a;
+      }
+    }
+  };
+
+  /* Build a synthetic .pt so the archive path can be exercised without a real
+     multi-gigabyte checkpoint. data.pkl is stored, constants.pkl is deflated,
+     which is exactly the two cases the reader has to handle. */
+  async function buildSampleArchive(){
+    var members = [
+      { name: "archive/data.pkl", bytes: FIXTURES.benign.bytes(), deflate: false },
+      { name: "archive/constants.pkl", bytes: FIXTURES.exec.bytes(), deflate: true },
+      { name: "archive/version", bytes: bytesFromLatin1("3\n"), deflate: false },
+      { name: "archive/byteorder", bytes: bytesFromLatin1("little"), deflate: false }
+    ];
+    var chunks = [];
+    var central = [];
+    var offset = 0;
+
+    for (var i = 0; i < members.length; i++){
+      var m = members[i];
+      var raw = m.bytes;
+      var stored = raw;
+      var method = 0;
+      if (m.deflate && typeof CompressionStream !== "undefined"){
+        stored = await deflateRaw(raw);
+        method = 8;
+      }
+      var nameBytes = bytesFromLatin1(m.name);
+      var lh = new Uint8Array(30 + nameBytes.length);
+      var dv = new DataView(lh.buffer);
+      dv.setUint32(0, 0x04034b50, true);
+      dv.setUint16(4, 20, true);
+      dv.setUint16(6, 0, true);
+      dv.setUint16(8, method, true);
+      dv.setUint32(14, crc32(raw), true);
+      dv.setUint32(18, stored.length, true);
+      dv.setUint32(22, raw.length, true);
+      dv.setUint16(26, nameBytes.length, true);
+      dv.setUint16(28, 0, true);
+      lh.set(nameBytes, 30);
+      chunks.push(lh); chunks.push(stored);
+
+      var cd = new Uint8Array(46 + nameBytes.length);
+      var cv = new DataView(cd.buffer);
+      cv.setUint32(0, 0x02014b50, true);
+      cv.setUint16(4, 20, true);
+      cv.setUint16(6, 20, true);
+      cv.setUint16(10, method, true);
+      cv.setUint32(16, crc32(raw), true);
+      cv.setUint32(20, stored.length, true);
+      cv.setUint32(24, raw.length, true);
+      cv.setUint16(28, nameBytes.length, true);
+      cv.setUint32(42, offset, true);
+      cd.set(nameBytes, 46);
+      central.push(cd);
+      offset += lh.length + stored.length;
+    }
+
+    var cdStart = offset;
+    var cdLen = 0;
+    for (var c = 0; c < central.length; c++){ chunks.push(central[c]); cdLen += central[c].length; }
+    var eocd = new Uint8Array(22);
+    var ev = new DataView(eocd.buffer);
+    ev.setUint32(0, 0x06054b50, true);
+    ev.setUint16(8, central.length, true);
+    ev.setUint16(10, central.length, true);
+    ev.setUint32(12, cdLen, true);
+    ev.setUint32(16, cdStart, true);
+    chunks.push(eocd);
+
+    var total = 0;
+    for (var t = 0; t < chunks.length; t++) total += chunks[t].length;
+    var out = new Uint8Array(total);
+    var p = 0;
+    for (var q = 0; q < chunks.length; q++){ out.set(chunks[q], p); p += chunks[q].length; }
+    return out;
+  }
+
+  async function deflateRaw(bytes){
+    var cs = new CompressionStream("deflate-raw");
+    var blob = new Blob([bytes]);
+    var stream = blob.stream().pipeThrough(cs);
+    var buf = await new Response(stream).arrayBuffer();
+    return new Uint8Array(buf);
+  }
+  async function inflateRaw(bytes){
+    if (typeof DecompressionStream === "undefined"){
+      throw new Error("This browser has no DecompressionStream, so deflated archive members cannot be read here.");
+    }
+    var ds = new DecompressionStream("deflate-raw");
+    var blob = new Blob([bytes]);
+    var stream = blob.stream().pipeThrough(ds);
+    var buf = await new Response(stream).arrayBuffer();
+    return new Uint8Array(buf);
+  }
+
+  function renderSampleButtons(){
+    var row = $("sample-row");
+    var order = ["cve", "benign", "proto4", "posix", "exec", "proto", "legacy"];
+    for (var i = 0; i < order.length; i++){
+      (function(key){
+        var f = FIXTURES[key];
+        var b = document.createElement("button");
+        b.type = "button";
+        b.className = "btn small" + (key === "cve" ? " primary" : "");
+        b.textContent = f.label;
+        b.title = f.note;
+        b.addEventListener("click", function(){ loadBytes(f.file, f.bytes()); });
+        row.appendChild(b);
+      })(order[i]);
+    }
+    var z = document.createElement("button");
+    z.type = "button";
+    z.className = "btn small";
+    z.textContent = "Synthetic .pt archive";
+    z.title = "A real ZIP with a stored data.pkl and a deflated constants.pkl.";
+    z.addEventListener("click", function(){
+      buildSampleArchive().then(function(bytes){ loadBytes("sample-checkpoint.pt", bytes); },
+        function(err){ showFatal(String(err && err.message ? err.message : err)); });
+    });
+    row.appendChild(z);
+  }
+
+  /* ---------- source adapter ---------- */
+  function sourceFromBlob(name, blob){
+    return {
+      name: name, size: blob.size,
+      slice: function(start, end){ return blob.slice(start, end); }
+    };
+  }
+  async function readSlice(source, start, end){
+    var s = Math.max(0, Math.min(start, source.size));
+    var e = Math.max(s, Math.min(end, source.size));
+    var buf = await source.slice(s, e).arrayBuffer();
+    return new Uint8Array(buf);
+  }
+
+  var MAX_PICKLE_BYTES = 48 * 1024 * 1024;
+  var TAIL_BYTES = 66000;
+
+  function loadBytes(name, bytes){
+    loadSource(sourceFromBlob(name, new Blob([bytes])));
+  }
+
+  async function loadSource(source){
+    state = { source: source, streams: [], container: null, members: [], notes: [] };
+    setProgress(8);
+    try {
+      var headLen = Math.min(source.size, 1024);
+      var head = await readSlice(source, 0, headLen);
+      var container = detectContainer(head);
+      state.container = container;
+
+      if (container.kind === "zip"){
+        await loadZip(source, container);
+      } else if (container.refuse){
+        /* the reason is already shown in the container card, do not repeat it */
+      } else {
+        if (source.size > MAX_PICKLE_BYTES){
+          state.notes.push("This bare pickle is " + fmtBytes(source.size) +
+            ". Only the first " + fmtBytes(MAX_PICKLE_BYTES) + " are read.");
+        }
+        var all = await readSlice(source, 0, Math.min(source.size, MAX_PICKLE_BYTES));
+        addStreams(source.name, all, "whole file");
+      }
+      setProgress(100);
+      render();
+    } catch (err){
+      setProgress(0);
+      showFatal(String(err && err.message ? err.message : err));
+    }
+  }
+
+  async function loadZip(source, container){
+    var tailStart = Math.max(0, source.size - TAIL_BYTES);
+    var tail = await readSlice(source, tailStart, source.size);
+    var eocd = findEocd(tail, tailStart, source.size);
+    if (!eocd.ok){
+      state.notes.push("This file starts like a ZIP but " + eocd.reason + ".");
+      return;
+    }
+    var cdOffset = eocd.cdOffset;
+    var cdSize = eocd.cdSize;
+    var totalEntries = eocd.totalEntries;
+    var zip64Used = false;
+
+    if (eocd.needsZip64){
+      var loc = findZip64Locator(tail, tailStart, eocd.eocdRel);
+      if (!loc.ok){
+        state.notes.push("The archive carries ZIP64 sentinels but " + loc.reason + ".");
+        return;
+      }
+      var z64buf = await readSlice(source, loc.zip64EocdOffset, loc.zip64EocdOffset + 56);
+      var z64 = parseZip64Eocd(z64buf);
+      if (!z64.ok){ state.notes.push("ZIP64: " + z64.reason + "."); return; }
+      cdOffset = z64.cdOffset; cdSize = z64.cdSize; totalEntries = z64.totalEntries;
+      zip64Used = true;
+    }
+    container.zip64 = zip64Used;
+    container.totalEntries = totalEntries;
+    container.cdOffset = cdOffset;
+    container.cdSize = cdSize;
+
+    if (cdSize > 64 * 1024 * 1024){
+      state.notes.push("The central directory is " + fmtBytes(cdSize) + ", which is beyond what this page reads.");
+      return;
+    }
+    var cd = await readSlice(source, cdOffset, cdOffset + cdSize);
+    var parsed = parseCentralDirectory(cd);
+    for (var w = 0; w < parsed.warnings.length; w++) state.notes.push(parsed.warnings[w]);
+
+    var pickles = [];
+    for (var i = 0; i < parsed.entries.length; i++){
+      var e = parsed.entries[i];
+      e.isPickle = isPickleMember(e.name);
+      if (e.isPickle) pickles.push(e);
+    }
+    state.members = parsed.entries;
+
+    for (var p = 0; p < pickles.length; p++){
+      var m = pickles[p];
+      setProgress(15 + Math.round(80 * (p / Math.max(1, pickles.length))));
+      try {
+        var lh = await readSlice(source, m.localOffset, m.localOffset + 30 + 65535 + 4);
+        var loc2 = localHeaderDataStart(lh);
+        if (!loc2.ok){ m.error = loc2.reason; continue; }
+        var dataStart = m.localOffset + loc2.dataRelative;
+        if (m.compSize > MAX_PICKLE_BYTES){
+          m.error = "member is " + fmtBytes(m.compSize) + " compressed, beyond the " +
+            fmtBytes(MAX_PICKLE_BYTES) + " this page reads";
+          continue;
+        }
+        var raw = await readSlice(source, dataStart, dataStart + m.compSize);
+        var data;
+        if (m.method === 0) data = raw;
+        else if (m.method === 8) data = await inflateRaw(raw);
+        else { m.error = "compression method " + m.method + " is not stored (0) or deflate (8), refusing to guess"; continue; }
+        m.extracted = data.length;
+        var actual = crc32(data);
+        m.crcOk = (actual === m.crc);
+        if (!m.crcOk) m.error = "CRC32 mismatch: header says 0x" + (m.crc >>> 0).toString(16) +
+          ", extracted bytes give 0x" + actual.toString(16);
+        addStreams(m.name, data, m.method === 8 ? "deflate-raw" : "stored");
+      } catch (err2){
+        m.error = String(err2 && err2.message ? err2.message : err2);
+      }
+    }
+    if (pickles.length === 0){
+      state.notes.push("No archive member is named .pkl or .debug_pkl, so there is no pickle here to disassemble.");
+    }
+  }
+
+  var MAX_STREAMS_PER_MEMBER = 8;
+
+  function addStreams(label, bytes, how){
+    var list = disassembleStream(bytes, MAX_STREAMS_PER_MEMBER);
+    var tail = list.length ? list[list.length - 1] : null;
+    if (list.length === MAX_STREAMS_PER_MEMBER && tail && tail.stopped && tail.end < bytes.length){
+      var moreData = false;
+      for (var z = tail.end; z < bytes.length; z++){ if (bytes[z] !== 0){ moreData = true; break; } }
+      if (moreData){
+        state.notes.push(asciiSafe(label, 90) + " holds more than " + MAX_STREAMS_PER_MEMBER +
+          " back-to-back pickles. Only the first " + MAX_STREAMS_PER_MEMBER +
+          " were walked, so the counts below are a floor, not a total.");
+      }
+    }
+    for (var i = 0; i < list.length; i++){
+      state.streams.push({
+        label: label + (list.length > 1 ? " [pickle " + (i + 1) + " of " + list.length + "]" : ""),
+        member: label, how: how, bytes: bytes, dis: list[i]
+      });
+    }
+  }
+
+  function fmtBytes(n){
+    if (!Number.isFinite(n) || n < 0) return "?";
+    if (n < 1024) return n + " B";
+    var kb = n / 1024;
+    if (kb < 1024) return (Math.round(kb * 10) / 10) + " KiB";
+    var mb = kb / 1024;
+    if (mb < 1024) return (Math.round(mb * 10) / 10) + " MiB";
+    var gb = mb / 1024;
+    return (Math.round(gb * 100) / 100) + " GiB";
+  }
+
+  function setProgress(pct){
+    var p = $("prog");
+    if (pct <= 0 || pct >= 100){ p.classList.add("hidden"); p.firstElementChild.style.width = "0%"; return; }
+    p.classList.remove("hidden");
+    p.firstElementChild.style.width = Math.max(0, Math.min(100, pct)) + "%";
+  }
+
+  function showFatal(msg){
+    $("results").classList.remove("hidden");
+    $("empty-state").classList.add("hidden");
+    html($("file-summary"), '<div class="verdict undecided"><div class="head">Could not read that file</div><p class="tiny" style="margin:6px 0 0">' +
+      escapeHtml(msg) + "</p></div>");
+    html($("verdict-block"), "");
+    html($("imports-block"), "");
+    html($("dis-block"), "");
+    html($("members-block"), "");
+  }
+
+  /* ---------- rendering the results ---------- */
+  function render(){
+    $("empty-state").classList.add("hidden");
+    $("results").classList.remove("hidden");
+    renderFile();
+    renderVerdict();
+    renderImports();
+    renderDisassembly();
+  }
+
+  function renderFile(){
+    var c = state.container || { label: "?", reason: "" };
+    var s = "";
+    var cls = c.refuse ? "verdict undecided" : "verdict";
+    s += '<div class="' + cls + '"><div class="head">' + escapeHtml(c.label);
+    if (c.refuse) s += ' <span class="badge warn">refused</span>';
+    s += "</div>";
+    s += '<p class="tiny" style="margin:8px 0 0">' + escapeHtml(c.reason) + "</p></div>";
+
+    s += '<dl class="kv" style="margin-top:12px">';
+    s += "<dt>file</dt><dd>" + escapeHtml(asciiSafe(state.source.name, 120)) + "</dd>";
+    s += "<dt>size</dt><dd>" + escapeHtml(fmtBytes(state.source.size)) + "</dd>";
+    if (c.kind === "zip"){
+      s += "<dt>zip entries</dt><dd>" + escapeHtml(String(c.totalEntries)) + "</dd>";
+      s += "<dt>zip64</dt><dd>" + (c.zip64 ? "yes, 64-bit fields followed" : "no, 32-bit fields sufficed") + "</dd>";
+      s += "<dt>bytes read</dt><dd>tail + central directory + pickle members only</dd>";
+    }
+    s += "<dt>pickle streams</dt><dd>" + escapeHtml(String(state.streams.length)) + "</dd>";
+    s += "</dl>";
+
+    for (var n = 0; n < state.notes.length; n++){
+      s += '<p class="tiny" style="color:var(--warn)">Note: ' + escapeHtml(state.notes[n]) + "</p>";
+    }
+    html($("file-summary"), s);
+
+    if (state.members.length === 0){ html($("members-block"), ""); return; }
+    var t = '<h3>Archive members</h3><div class="scrollx scrolly"><table><thead><tr>' +
+      "<th>name</th><th>method</th><th>stored</th><th>uncompressed</th><th>crc32</th><th>read</th>" +
+      "</tr></thead><tbody>";
+    for (var i = 0; i < state.members.length; i++){
+      var m = state.members[i];
+      var cls2 = m.isPickle ? (m.error ? "note" : "good") : "";
+      t += '<tr class="' + cls2 + '">';
+      t += '<td class="m">' + escapeHtml(asciiSafe(m.name, 90)) + "</td>";
+      t += "<td>" + (m.method === 0 ? "stored" : m.method === 8 ? "deflate" : "method " + m.method) + "</td>";
+      t += '<td class="num">' + escapeHtml(fmtBytes(m.compSize)) + "</td>";
+      t += '<td class="num">' + escapeHtml(fmtBytes(m.uncompSize)) + "</td>";
+      t += '<td class="m">' + (m.isPickle ? (m.crcOk === true ? "verified" : m.crcOk === false ? "MISMATCH" : "not read") : "not read") + "</td>";
+      t += "<td>" + (m.isPickle ? (m.error ? escapeHtml(m.error) : "disassembled") : "skipped, not a pickle name") + "</td>";
+      t += "</tr>";
+    }
+    t += "</tbody></table></div>";
+    t += '<p class="tiny">Only members named <code>*.pkl</code> or <code>*.debug_pkl</code> are read. ' +
+         "Everything else, including every tensor storage record, is left on disk untouched.</p>";
+    html($("members-block"), t);
+  }
+
+  function currentExtraSet(){ return makeExtraSet($("extra-safe").value); }
+
+  function renderVerdict(){
+    if (state.streams.length === 0){
+      html($("verdict-block"), '<div class="verdict undecided"><div class="head">No pickle to evaluate</div>' +
+        '<p class="tiny" style="margin:8px 0 0">There is no pickle stream in this file, so there is no ' +
+        "weights_only decision to reproduce.</p></div>");
+      return;
+    }
+    var extra = currentExtraSet();
+    var results = [];
+    var worst = "no-blocker";
+    for (var i = 0; i < state.streams.length; i++){
+      var ev = evaluateWeightsOnly(state.streams[i].dis, PROFILE, extra);
+      results.push(ev);
+      if (ev.status === "reject") worst = "reject";
+      else if (ev.status === "undecided" && worst !== "reject") worst = "undecided";
+    }
+
+    var cls = worst === "reject" ? "reject" : worst === "undecided" ? "undecided" : "pass";
+    var headline = worst === "reject"
+      ? "torch.load(weights_only=True) would REFUSE this file"
+      : worst === "undecided"
+        ? "Undecided: the pickle could not be read to the end"
+        : "No blocker found in the checks this tool performs";
+
+    var s = '<div class="verdict ' + cls + '">';
+    s += '<div class="head">' + escapeHtml(headline);
+    s += ' <span class="badge snap">against torch ' + escapeHtml(PROFILE.tag) + " tables, " +
+         escapeHtml(PROFILE.transcribed) + "</span></div>";
+
+    if (worst === "reject"){
+      for (var r = 0; r < results.length; r++){
+        if (!results[r].first) continue;
+        var st = state.streams[r];
+        s += '<p style="margin:10px 0 2px"><strong class="mono">' + escapeHtml(asciiSafe(st.label, 90)) + "</strong></p>";
+        s += '<p class="mono" style="margin:0 0 4px;font-size:.84rem">offset ' + results[r].first.off +
+             " &middot; " + escapeHtml(results[r].first.opcode) + "</p>";
+        s += "<p style=\"margin:0 0 4px\">" + escapeHtml(results[r].first.message) + "</p>";
+        s += '<p class="tiny" style="margin:0">' + escapeHtml(results[r].first.detail) + "</p>";
+        if (results[r].blockers.length > 1){
+          s += '<p class="tiny" style="margin:6px 0 0">torch raises on the first one. ' +
+               (results[r].blockers.length - 1) + " more would follow if you cleared it.</p>";
+        }
+      }
+    } else if (worst === "no-blocker"){
+      s += "<p style=\"margin:10px 0 4px\">Every opcode in this file is implemented by the weights_only " +
+           "unpickler, and every <code>GLOBAL</code> it resolves is on the allowed list.</p>";
+      s += '<p class="tiny" style="margin:0">This is deliberately not phrased as "safe". ' +
+           'See <a href="#not-decided">what this tool does not decide</a> for the runtime type checks ' +
+           "no static reader can evaluate.</p>";
+    } else {
+      s += "<p style=\"margin:10px 0 4px\">The opcode walk stopped before the STOP opcode, so the rest of " +
+           "the stream was never evaluated. Anything after the stopping point is unexamined.</p>";
+    }
+
+    s += '<div class="pin">Computation: this page, from your bytes, just now. ' +
+         "Reference tables: torch " + escapeHtml(PROFILE.tag) + " (tag released " +
+         escapeHtml(PROFILE.tagReleased) + "), transcribed " + escapeHtml(PROFILE.transcribed) +
+         ". This is an admission decision against a dated table, never a bare safe or unsafe: " +
+         "the allowlist grows every release, so re-check section 7 against your torch version.</div>";
+    s += "</div>";
+
+    /* per-stream detail */
+    for (var k = 0; k < results.length; k++){
+      var ev2 = results[k];
+      var stream = state.streams[k];
+      if (ev2.blockers.length === 0 && ev2.notes.length === 0) continue;
+      s += "<details><summary>All findings for " + escapeHtml(asciiSafe(stream.label, 90)) +
+           " (" + ev2.blockers.length + " blocker" + (ev2.blockers.length === 1 ? "" : "s") + ")</summary>";
+      if (ev2.blockers.length > 0){
+        s += '<div class="scrollx"><table><thead><tr><th>offset</th><th>opcode</th><th>what torch raises</th></tr></thead><tbody>';
+        for (var bb = 0; bb < ev2.blockers.length; bb++){
+          var bl2 = ev2.blockers[bb];
+          s += '<tr class="hit"><td class="num">' + bl2.off + '</td><td class="m">' +
+               escapeHtml(bl2.opcode) + "</td><td>" + escapeHtml(bl2.message) +
+               '<div class="tiny">' + escapeHtml(bl2.detail) + "</div></td></tr>";
+        }
+        s += "</tbody></table></div>";
+        if (ev2.blockerOverflow > 0){
+          s += '<p class="tiny">And ' + ev2.blockerOverflow +
+               " more of the same kind, not listed. torch stops at the first one anyway.</p>";
+        }
+      }
+      for (var nn = 0; nn < ev2.notes.length; nn++){
+        s += '<p class="tiny">Not evaluated: ' + escapeHtml(ev2.notes[nn].message) + "</p>";
+      }
+      s += "</details>";
+    }
+    html($("verdict-block"), s);
+  }
+
+  var DANGEROUS_HINT = (function(){
+    var m = Object.create(null);
+    var rows = [
+      ["os", "*"], ["posix", "*"], ["nt", "*"], ["sys", "*"], ["subprocess", "*"],
+      ["shutil", "*"], ["pty", "*"], ["socket", "*"], ["runpy", "*"], ["importlib", "*"],
+      ["webbrowser", "*"], ["ctypes", "*"], ["multiprocessing", "*"], ["pickle", "*"],
+      ["builtins", "eval exec compile getattr setattr __import__ open input breakpoint"],
+      ["operator", "attrgetter methodcaller itemgetter"],
+      ["functools", "partial reduce"],
+      ["bdb", "*"], ["pdb", "*"], ["timeit", "*"], ["code", "*"], ["codeop", "*"]
+    ];
+    for (var i = 0; i < rows.length; i++) m[rows[i][0]] = rows[i][1];
+    return m;
+  })();
+
+  function hintFor(module, name){
+    if (!Object.prototype.hasOwnProperty.call(DANGEROUS_HINT, module)){
+      var dot = module.indexOf(".");
+      if (dot > 0){
+        var top = module.slice(0, dot);
+        if (Object.prototype.hasOwnProperty.call(DANGEROUS_HINT, top) && DANGEROUS_HINT[top] === "*") return true;
+      }
+      return false;
+    }
+    var v = DANGEROUS_HINT[module];
+    if (v === "*") return true;
+    return (" " + v + " ").indexOf(" " + name + " ") >= 0;
+  }
+
+  function renderImports(){
+    var extra = currentExtraSet();
+    var totalImports = 0, totalCalls = 0;
+    var s = "";
+
+    for (var i = 0; i < state.streams.length; i++){
+      var st = state.streams[i];
+      var d = st.dis;
+      totalImports += d.imports.length;
+      totalCalls += d.calls.length;
+
+      s += "<h3>" + escapeHtml(asciiSafe(st.label, 100)) + "</h3>";
+      if (d.imports.length === 0){
+        s += '<p class="tiny">No import opcode in this stream.</p>';
+      } else {
+        s += '<div class="scrollx"><table><thead><tr><th>import</th><th>opcode</th><th class="num">offset</th>' +
+             "<th>resolved by</th><th>called</th><th>weights_only status</th></tr></thead><tbody>";
+        for (var j = 0; j < d.imports.length; j++){
+          var im = d.imports[j];
+          var mapped = applyTorchNameMapping(PROFILE, im.module, im.name);
+          var full = mapped.module + "." + mapped.name;
+          var blocked = Object.prototype.hasOwnProperty.call(PROFILE.blockSet, mapped.module);
+          var fam = blocked ? "" : isAllowedGlobal(PROFILE, full, extra);
+          var risky = hintFor(mapped.module, mapped.name);
+          var cls = blocked || risky ? "hit" : (fam ? "good" : "note");
+          var statusText = blocked
+            ? "module blocklisted, cannot be allowlisted"
+            : fam ? "allowed (" + fam + ")" : "not on the allowed list";
+          if (im.opcode === "STACK_GLOBAL"){
+            statusText += "; and STACK_GLOBAL is not an implemented opcode, so torch refuses the stream regardless";
+          }
+          s += '<tr class="' + cls + '">';
+          s += '<td class="m">' + escapeHtml(asciiSafe(im.module, 80)) + "." +
+               escapeHtml(asciiSafe(im.name, 80)) +
+               (mapped.rewritten ? '<div class="tiny">torch rewrites this to <code>' +
+                 escapeHtml(asciiSafe(full, 80)) + "</code> before checking</div>" : "") + "</td>";
+          s += '<td class="m">' + escapeHtml(im.opcode) + "</td>";
+          s += '<td class="num">' + im.off + "</td>";
+          s += "<td>" + escapeHtml(im.how === "inline" ? "inline operands"
+                : im.how === "stack+memo" ? "stack model, one operand from the memo"
+                : "stack model") + "</td>";
+          if (im.called.length === 0) s += '<td class="dim">not called</td>';
+          else {
+            var cl = [];
+            for (var cc = 0; cc < im.called.length; cc++) cl.push(im.called[cc].opcode + " @ " + im.called[cc].off);
+            s += '<td class="m">' + escapeHtml(cl.join(", ")) + "</td>";
+          }
+          s += "<td>" + escapeHtml(statusText) + "</td>";
+          s += "</tr>";
+        }
+        s += "</tbody></table></div>";
+      }
+
+      if (d.calls.length > 0){
+        s += '<h4>Call sites</h4><div class="scrollx"><table><thead><tr><th class="num">offset</th>' +
+             "<th>opcode</th><th>callee</th><th>args</th></tr></thead><tbody>";
+        for (var k = 0; k < d.calls.length; k++){
+          var ca = d.calls[k];
+          var isRisky = ca.callee && hintFor(ca.callee.module, ca.callee.name);
+          s += '<tr class="' + (isRisky ? "hit" : "") + '">';
+          s += '<td class="num">' + ca.off + '</td><td class="m">' + escapeHtml(ca.opcode) + "</td>";
+          s += '<td class="m">' + escapeHtml(asciiSafe(ca.calleeDesc, 90)) + "</td>";
+          s += '<td class="num">' + (ca.argCount >= 0 ? ca.argCount : "?") + "</td></tr>";
+        }
+        s += "</tbody></table></div>";
+      }
+    }
+
+    var lead = '<p><strong>' + totalImports + "</strong> import" + (totalImports === 1 ? "" : "s") +
+      " and <strong>" + totalCalls + "</strong> call site" + (totalCalls === 1 ? "" : "s") +
+      " across " + state.streams.length + " pickle stream" + (state.streams.length === 1 ? "" : "s") + ".</p>" +
+      '<p class="tiny">Rows are shaded red where the module or name is on a short, deliberately ' +
+      "non-exhaustive watchlist, or where the module is on torch's blocklist. The absence of a red row " +
+      "is not a clean bill of health: under plain <code>pickle.load</code> or " +
+      "<code>weights_only=False</code>, <em>any</em> import reached by a <code>REDUCE</code> is a call " +
+      "into code you did not write.</p>" +
+      '<div class="legend">' +
+      '<span><i class="swatch" style="background:color-mix(in srgb,var(--bad) 40%,transparent)"></i> watchlist or blocklisted</span>' +
+      '<span><i class="swatch" style="background:color-mix(in srgb,var(--ok) 30%,transparent)"></i> on the torch allowed list</span>' +
+      '<span><i class="swatch" style="background:color-mix(in srgb,var(--warn) 30%,transparent)"></i> not allowed, not obviously hostile</span>' +
+      "</div>";
+
+    html($("imports-block"), lead + s);
+  }
+
+  function disassemblyText(stream){
+    var lines = [];
+    var d = stream.dis;
+    lines.push("# " + stream.label + "  (" + stream.how + ")");
+    if (d.protoDeclared >= 0) lines.push("# declared protocol " + d.protoDeclared +
+      ", highest protocol among opcodes " + d.maxProto);
+    for (var i = 0; i < d.ops.length; i++){
+      var op = d.ops[i];
+      var pad = String(op.off);
+      while (pad.length < 6) pad = " " + pad;
+      var indent = "";
+      for (var k = 0; k < op.depth; k++) indent += "    ";
+      var line = pad + ": " + indent + op.name + (op.argText ? " " + op.argText : "");
+      if (op.note) line += "    <- " + op.note;
+      lines.push(line);
+    }
+    if (d.error) lines.push("       ** stopped at offset " + d.error.off + ": " + d.error.message);
+    return lines.join("\n");
+  }
+
+  var MAX_ROWS = 4000;
+
+  function renderDisassembly(){
+    var sel = $("dis-select");
+    html(sel, "");
+    for (var i = 0; i < state.streams.length; i++){
+      var o = document.createElement("option");
+      o.value = String(i);
+      o.textContent = asciiSafe(state.streams[i].label, 80);
+      sel.appendChild(o);
+    }
+    sel.onchange = function(){ paintDis(parseInt(sel.value, 10) || 0); };
+    if (state.streams.length === 0){
+      html($("dis-block"), '<p class="tiny">No pickle stream in this file.</p>');
+      return;
+    }
+    paintDis(0);
+  }
+
+  function paintDis(idx){
+    var stream = state.streams[idx];
+    if (!stream) return;
+    var d = stream.dis;
+    var s = '<dl class="kv" style="margin-bottom:10px">';
+    s += "<dt>member</dt><dd>" + escapeHtml(asciiSafe(stream.member, 90)) + "</dd>";
+    s += "<dt>extracted</dt><dd>" + escapeHtml(stream.how) + "</dd>";
+    s += "<dt>declared proto</dt><dd>" + (d.protoDeclared >= 0 ? d.protoDeclared : "none (protocol 0 or 1)") + "</dd>";
+    s += "<dt>opcodes used</dt><dd>up to protocol " + d.maxProto + "</dd>";
+    s += "<dt>ops</dt><dd>" + d.opCount + "</dd>";
+    s += "<dt>reached STOP</dt><dd>" + (d.stopped ? "yes" : "no") + "</dd>";
+    s += "</dl>";
+
+    if (d.error){
+      s += '<p class="tiny" style="color:var(--warn)">Walk stopped at offset ' + d.error.off + ": " +
+           escapeHtml(d.error.message) + "</p>";
+    }
+
+    var rows = Math.min(d.ops.length, MAX_ROWS);
+    s += '<div class="scrollx scrolly"><table><thead><tr><th class="num">offset</th><th>opcode</th>' +
+         '<th>argument</th><th class="num">stack</th><th>note</th></tr></thead><tbody>';
+    for (var i = 0; i < rows; i++){
+      var op = d.ops[i];
+      var cls = (op.flag === "import" || op.flag === "call") ? "note" : "";
+      var indent = "";
+      for (var k = 0; k < op.depth; k++) indent += "&nbsp;&nbsp;";
+      s += '<tr class="' + cls + '">';
+      s += '<td class="num">' + op.off + "</td>";
+      s += '<td class="m">' + indent + escapeHtml(op.name) + "</td>";
+      s += '<td class="m">' + escapeHtml(op.argText) + "</td>";
+      s += '<td class="num">' + (Number.isFinite(op.stackDepth) ? op.stackDepth : "?") + "</td>";
+      s += "<td>" + escapeHtml(op.note) + "</td>";
+      s += "</tr>";
+    }
+    s += "</tbody></table></div>";
+    s += '<div class="legend"><span><i class="swatch" style="background:color-mix(in srgb,var(--warn) 30%,transparent)"></i> ' +
+         "resolves an import or calls one</span>" +
+         "<span>stack = modelled stack depth after the opcode ran</span></div>";
+    if (d.ops.length > rows){
+      s += '<p class="tiny">Showing the first ' + rows + " of " + d.ops.length +
+           " opcodes. Use the copy button for the full text.</p>";
+    }
+    html($("dis-block"), s);
+  }
+
+  $("btn-copy-dis").addEventListener("click", function(){
+    var idx = parseInt($("dis-select").value, 10) || 0;
+    var stream = state.streams[idx];
+    if (!stream) return;
+    var text = disassemblyText(stream);
+    var btn = this;
+    var done = function(){ btn.textContent = "Copied"; window.setTimeout(function(){ btn.textContent = "Copy disassembly"; }, 1400); };
+    if (navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text).then(done, function(){ fallbackCopy(text, done, btn); });
+    } else fallbackCopy(text, done, btn);
+  });
+
+  $("btn-reapply").addEventListener("click", function(){
+    if (state.streams.length === 0 && !state.container) return;
+    renderVerdict(); renderImports();
+  });
+
+  /* ---------- CVE regression panel ---------- */
+  function renderCve(){
+    var bytes = FIXTURES.cve.bytes();
+    var d = disassemblePickle(bytes, 0);
+    var psOps = opsForPicklescan(d, bytes);
+    var pre = picklescanStackGlobal(psOps, "pre-0.0.27");
+    var post = picklescanStackGlobal(psOps, "post-0.0.27");
+
+    var mine = [];
+    for (var i = 0; i < d.imports.length; i++) mine.push(d.imports[i].module + "." + d.imports[i].name);
+
+    var s = "";
+    s += '<div class="codewrap scrollx"><pre id="cve-dis">' +
+         escapeHtml(disassemblyText({ label: "cve-2025-71325.pkl", how: "fixture", dis: d })) + "</pre></div>";
+
+    s += '<div class="grid two" style="margin-top:12px">';
+
+    s += '<div class="panel" style="margin:0"><h3 style="margin-top:0">Three implementations, one payload</h3>';
+    s += '<div class="scrollx"><table><thead><tr><th>reader</th><th>result</th></tr></thead><tbody>';
+    s += '<tr class="hit"><td>picklescan &lt; 0.0.27<div class="tiny mono">range(1, n)</div>' +
+         '<div class="tiny">string opcodes: SHORT_BINUNICODE, UNICODE, BINUNICODE, BINUNICODE8</div></td><td class="m">' +
+         escapeHtml(pre.raised ? pre.error : pre.globals.map(function(g){ return g[0] + "." + g[1]; }).join(", ")) +
+         '<div class="tiny">Nothing reported. The advisory calls this a detection bypass.</div></td></tr>';
+    s += '<tr class="good"><td>picklescan &gt;= 0.0.27<div class="tiny mono">range(1, n + 1)</div>' +
+         '<div class="tiny">same release also added STRING, BINSTRING and SHORT_BINSTRING to the string-opcode list</div></td><td class="m">' +
+         escapeHtml(post.raised ? post.error : post.globals.map(function(g){ return g[0] + "." + g[1]; }).join(", ")) +
+         "</td></tr>";
+    s += '<tr class="good"><td>this page<div class="tiny">real pickle stack</div></td><td class="m">' +
+         escapeHtml(mine.join(", ")) +
+         '<div class="tiny">Resolved by popping the two operands, which is what the interpreter itself would do.</div></td></tr>';
+    s += "</tbody></table></div></div>";
+
+    s += '<div class="panel" style="margin:0"><h3 style="margin-top:0">Why index 0 was reachable</h3>';
+    s += "<p class=\"tiny\">This is a protocol 0 pickle. There is no <code>PROTO</code> opcode to occupy " +
+         "op index 0, so the very first opcode is a real <code>STRING</code> operand. In a protocol 2 " +
+         "checkpoint written by <code>torch.save</code>, index 0 is always <code>PROTO</code> and the bug " +
+         "is invisible. That is why it survived.</p>";
+    var ev = evaluateWeightsOnly(d, PROFILE, Object.create(null));
+    s += "<h4>And what torch would do</h4>";
+    s += '<p class="tiny">Separately from any scanner: <code>torch.load(weights_only=True)</code> refuses ' +
+         "this file at offset " + (ev.first ? ev.first.off : "?") + " with <code class=\"mono\">" +
+         escapeHtml(ev.first ? ev.first.message : "no blocker") + "</code>. The refusal lands on the opcode, " +
+         "before the dangerous import is ever reached, which is the point of section 3.</p>";
+    s += "</div></div>";
+
+    s += '<p class="tiny" style="margin-top:10px">Advisory offsets 0, 6, 16, 17, 23, 24, 25 are asserted ' +
+         "against this disassembly in the self-tests. If a future change to the reader shifts one of them, " +
+         "the test goes red.</p>";
+
+    html($("cve-block"), s);
+
+    var wrap = $("cve-block").querySelector(".codewrap");
+    if (wrap) wrap.appendChild(copyButton("Copy", function(){
+      return disassemblyText({ label: "cve-2025-71325.pkl", how: "fixture", dis: d });
+    }));
+  }
+
+  /* ---------- self-tests ---------- */
+  function runSelfTests(){
+    var tests = [];
+    function t(name, fn){
+      var pass = false, detail = "";
+      try {
+        var r = fn();
+        if (r === true){ pass = true; }
+        else if (r && typeof r === "object" && "pass" in r){ pass = !!r.pass; detail = r.detail || ""; }
+        else { pass = false; detail = "returned " + String(r); }
+      } catch (e){ pass = false; detail = "threw " + String(e && e.message ? e.message : e); }
+      tests.push({ name: name, pass: pass, detail: detail });
+    }
+    function eq(a, b, label){
+      return { pass: a === b, detail: a === b ? "" : label + ": expected " + String(b) + ", got " + String(a) };
+    }
+
+    var cveBytes = FIXTURES.cve.bytes();
+    var cve = disassemblePickle(cveBytes, 0);
+
+    t("CVE fixture is exactly 26 bytes", function(){ return eq(cveBytes.length, 26, "length"); });
+    t("CVE offsets match the advisory disassembly", function(){
+      var want = [[0, "STRING"], [6, "STRING"], [16, "STACK_GLOBAL"], [17, "STRING"],
+                  [23, "TUPLE1"], [24, "REDUCE"], [25, "STOP"]];
+      if (cve.ops.length !== want.length) return { pass: false, detail: "op count " + cve.ops.length };
+      for (var i = 0; i < want.length; i++){
+        if (cve.ops[i].off !== want[i][0] || cve.ops[i].name !== want[i][1]){
+          return { pass: false, detail: "op " + i + " is " + cve.ops[i].name + " @ " + cve.ops[i].off };
+        }
+      }
+      return true;
+    });
+    t("stack model resolves STACK_GLOBAL to os.system", function(){
+      if (cve.imports.length !== 1) return { pass: false, detail: cve.imports.length + " imports" };
+      return eq(cve.imports[0].module + "." + cve.imports[0].name, "os.system", "import");
+    });
+    t("REDUCE at offset 24 is attributed to os.system", function(){
+      var c = null;
+      for (var i = 0; i < cve.calls.length; i++) if (cve.calls[i].opcode === "REDUCE") c = cve.calls[i];
+      if (!c) return { pass: false, detail: "no REDUCE call recorded" };
+      return { pass: c.off === 24 && c.callee && c.callee.module === "os" && c.callee.name === "system",
+               detail: "callee " + c.calleeDesc + " at " + c.off };
+    });
+    t("picklescan < 0.0.27 raises on the CVE payload", function(){
+      var r = picklescanStackGlobal(opsForPicklescan(cve, cveBytes), "pre-0.0.27");
+      return { pass: r.raised && r.globals.length === 0, detail: r.error || "did not raise" };
+    });
+    t("picklescan >= 0.0.27 resolves os.system", function(){
+      var r = picklescanStackGlobal(opsForPicklescan(cve, cveBytes), "post-0.0.27");
+      return { pass: !r.raised && r.globals.length === 1 && r.globals[0][0] === "os" && r.globals[0][1] === "system",
+               detail: r.raised ? r.error : JSON.stringify(r.globals) };
+    });
+    t("torch refuses the CVE payload on the opcode, not the import", function(){
+      var ev = evaluateWeightsOnly(cve, PROFILE, Object.create(null));
+      return { pass: ev.status === "reject" && ev.first.kind === "opcode" && ev.first.off === 0 &&
+                     ev.first.opcode === "STRING",
+               detail: ev.first ? ev.first.opcode + " @ " + ev.first.off : "no blocker" };
+    });
+
+    var benignBytes = FIXTURES.benign.bytes();
+    var benign = disassemblePickle(benignBytes, 0);
+    t("benign state_dict reaches STOP at offset 172", function(){
+      return { pass: benign.stopped && benign.ops[benign.ops.length - 1].off === 172,
+               detail: "last op " + benign.ops[benign.ops.length - 1].name + " @ " +
+                       benign.ops[benign.ops.length - 1].off };
+    });
+    t("benign state_dict resolves its three imports", function(){
+      var got = [];
+      for (var i = 0; i < benign.imports.length; i++) got.push(benign.imports[i].module + "." + benign.imports[i].name);
+      got.sort();
+      var want = ["collections.OrderedDict", "torch.FloatStorage", "torch._utils._rebuild_tensor_v2"];
+      return { pass: got.join("|") === want.join("|"), detail: got.join(", ") };
+    });
+    t("benign state_dict finds no weights_only blocker", function(){
+      var ev = evaluateWeightsOnly(benign, PROFILE, Object.create(null));
+      return { pass: ev.status === "no-blocker",
+               detail: ev.first ? ev.first.message : ev.status };
+    });
+
+    var p4 = disassemblePickle(FIXTURES.proto4.bytes(), 0);
+    t("protocol 4 file with only an allowlisted import is still refused", function(){
+      var ev = evaluateWeightsOnly(p4, PROFILE, Object.create(null));
+      var hasBadImport = false;
+      for (var i = 0; i < p4.imports.length; i++){
+        var f = p4.imports[i].module + "." + p4.imports[i].name;
+        if (!isAllowedGlobal(PROFILE, f, null)) hasBadImport = true;
+      }
+      return { pass: ev.status === "reject" && ev.first.kind === "opcode" &&
+                     ev.first.opcode === "FRAME" && ev.first.off === 2 && !hasBadImport,
+               detail: (ev.first ? ev.first.opcode + " @ " + ev.first.off : "none") +
+                       ", dangerous import present: " + hasBadImport };
+    });
+
+    var px = disassemblePickle(FIXTURES.posix.bytes(), 0);
+    t("posix.system is blocked by module, with torch's wording", function(){
+      var ev = evaluateWeightsOnly(px, PROFILE, Object.create(null));
+      return { pass: ev.status === "reject" && ev.first.message.indexOf("whose module posix is blocked") > 0,
+               detail: ev.first ? ev.first.message : "no blocker" };
+    });
+    t("add_safe_globals cannot re-allow a blocklisted module", function(){
+      var ev = evaluateWeightsOnly(px, PROFILE, makeExtraSet("posix.system"));
+      return { pass: ev.status === "reject" && ev.first.message.indexOf("is blocked") > 0,
+               detail: ev.first ? ev.first.message : "no blocker" };
+    });
+
+    var ex = disassemblePickle(FIXTURES.exec.bytes(), 0);
+    t("STACK_GLOBAL resolves builtins.exec across two pushes", function(){
+      var got = [];
+      for (var i = 0; i < ex.imports.length; i++) got.push(ex.imports[i].module + "." + ex.imports[i].name);
+      return { pass: got.length === 1 && got[0] === "builtins.exec", detail: got.join(", ") };
+    });
+
+    var pp = disassemblePickle(FIXTURES.proto.bytes(), 0);
+    t("an import named __proto__ survives the lookup maps", function(){
+      if (pp.imports.length !== 1) return { pass: false, detail: pp.imports.length + " imports" };
+      var im = pp.imports[0];
+      var allowed = isAllowedGlobal(PROFILE, im.module + "." + im.name, makeExtraSet("something.else"));
+      return { pass: im.module === "constructor" && im.name === "__proto__" && allowed === "",
+               detail: im.module + "." + im.name + " allowed=" + JSON.stringify(allowed) };
+    });
+    t("a key named constructor does not leak from Object.prototype", function(){
+      var set = makeExtraSet("a.b");
+      return { pass: isAllowedGlobal(PROFILE, "constructor", set) === "" &&
+                     isAllowedGlobal(PROFILE, "toString", set) === "",
+               detail: "" };
+    });
+
+    t("torch rewrites __builtin__.intern to sys.intern and blocks it", function(){
+      var m = applyTorchNameMapping(PROFILE, "__builtin__", "intern");
+      return { pass: m.module === "sys" && m.name === "intern" &&
+                     Object.prototype.hasOwnProperty.call(PROFILE.blockSet, m.module),
+               detail: m.module + "." + m.name };
+    });
+    t("torch strips the builtins prefix in its error text", function(){
+      return eq(torchErrorPath("builtins.eval"), "eval", "path");
+    });
+
+    t("legacy non-ZIP torch format is refused, not parsed", function(){
+      var c = detectContainer(FIXTURES.legacy.bytes());
+      return { pass: c.kind === "legacy-torch" && c.refuse === true, detail: c.kind };
+    });
+    t("a real ZIP header is recognised the way torch recognises it", function(){
+      var c = detectContainer(new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0, 0, 0, 0]));
+      return { pass: c.kind === "zip", detail: c.kind };
+    });
+
+    t("u32le returns unsigned, not a negative int32", function(){
+      var b = new Uint8Array([0xff, 0xff, 0xff, 0xff]);
+      return eq(u32le(b, 0), 4294967295, "u32le");
+    });
+    t("bigToSafe refuses a 64-bit value past 2^53-1", function(){
+      var big = BigInt("18446744073709551615");
+      var r = bigToSafe(big);
+      return { pass: r.ok === false && r.value === 0, detail: JSON.stringify(r) };
+    });
+    t("Number.isFinite is used, so a numeric string never passes a guard", function(){
+      return { pass: Number.isFinite("14") === false && isFinite("14") === true,
+               detail: "global isFinite coerces, Number.isFinite does not" };
+    });
+    t("decodeLongBytes handles the sign bit", function(){
+      var b = new Uint8Array([0xff]);
+      var neg = decodeLongBytes(b, 0, 1);
+      var pos = decodeLongBytes(new Uint8Array([0x7f]), 0, 1);
+      return { pass: neg === BigInt(-1) && pos === BigInt(127), detail: neg + " / " + pos };
+    });
+
+    t("EOCD is found behind a trailing archive comment", function(){
+      var comment = "hello";
+      var buf = new Uint8Array(22 + comment.length);
+      var dv = new DataView(buf.buffer);
+      dv.setUint32(0, 0x06054b50, true);
+      dv.setUint16(10, 3, true);
+      dv.setUint32(12, 138, true);
+      dv.setUint32(16, 900, true);
+      dv.setUint16(20, comment.length, true);
+      for (var i = 0; i < comment.length; i++) buf[22 + i] = comment.charCodeAt(i);
+      var r = findEocd(buf, 1000, 1027);
+      return { pass: r.ok && r.cdOffset === 900 && r.cdSize === 138 && r.totalEntries === 3 && !r.needsZip64,
+               detail: JSON.stringify(r) };
+    });
+    t("ZIP64 sentinels route through the locator and the 64-bit record", function(){
+      var z64 = new Uint8Array(56);
+      var zv = new DataView(z64.buffer);
+      zv.setUint32(0, 0x06064b50, true);
+      zv.setBigUint64(32, BigInt(4), true);
+      zv.setBigUint64(40, BigInt(200), true);
+      zv.setBigUint64(48, BigInt("5000000000"), true);
+      var parsed = parseZip64Eocd(z64);
+
+      var tail = new Uint8Array(20 + 22);
+      var tv = new DataView(tail.buffer);
+      tv.setUint32(0, 0x07064b50, true);
+      tv.setBigUint64(8, BigInt(1234), true);
+      tv.setUint32(20, 0x06054b50, true);
+      tv.setUint16(30, 0xffff, true);
+      tv.setUint32(32, 0xffffffff, true);
+      tv.setUint32(36, 0xffffffff, true);
+      var e = findEocd(tail, 0, 42);
+      var loc = e.ok ? findZip64Locator(tail, 0, e.eocdRel) : { ok: false };
+      return { pass: parsed.ok && parsed.cdOffset === 5000000000 && parsed.totalEntries === 4 &&
+                     e.ok && e.needsZip64 === true && loc.ok && loc.zip64EocdOffset === 1234,
+               detail: JSON.stringify({ parsed: parsed, needs: e.needsZip64, loc: loc }) };
+    });
+    t("the ZIP64 extra field only reads the fields the sentinels asked for", function(){
+      var extra = new Uint8Array(4 + 16);
+      var dv = new DataView(extra.buffer);
+      dv.setUint16(0, 0x0001, true);
+      dv.setUint16(2, 16, true);
+      dv.setBigUint64(4, BigInt(7000000000), true);
+      dv.setBigUint64(12, BigInt(6000000000), true);
+      var both = readZip64Extra(extra, true, true, false);
+      var onlyOffset = readZip64Extra(extra, false, false, true);
+      return { pass: both.uncompSize === 7000000000 && both.compSize === 6000000000 &&
+                     onlyOffset.localOffset === 7000000000,
+               detail: JSON.stringify({ both: both, onlyOffset: onlyOffset }) };
+    });
+    t("every pickle name is selected, including TorchScript .debug_pkl", function(){
+      return { pass: isPickleMember("archive/data.pkl") === true &&
+                     isPickleMember("archive/constants.pkl") === true &&
+                     isPickleMember("archive/callstack_debug_map.pkl") === true &&
+                     isPickleMember("archive/code/__torch__.py.debug_pkl") === true &&
+                     isPickleMember("archive/data/0") === false &&
+                     isPickleMember("pkl") === false &&
+                     isPickleMember("archive/version") === false,
+               detail: "" };
+    });
+    t("crc32 matches the standard check value for '123456789'", function(){
+      var b = new Uint8Array(9);
+      var s = "123456789";
+      for (var i = 0; i < 9; i++) b[i] = s.charCodeAt(i);
+      return eq(crc32(b) >>> 0, 0xcbf43926, "crc32");
+    });
+
+    t("a truncated pickle stops cleanly instead of throwing", function(){
+      var full = FIXTURES.benign.bytes();
+      var cut = full.subarray(0, 40);
+      var d2 = disassemblePickle(cut, 0);
+      return { pass: d2.ok === false && d2.stopped === false && d2.error !== null && d2.ops.length > 0,
+               detail: d2.error ? d2.error.message : "no error recorded" };
+    });
+    t("an unknown opcode byte stops the walk rather than guessing", function(){
+      var b = new Uint8Array([0x80, 0x02, 0x01, 0x2e]);
+      var d3 = disassemblePickle(b, 0);
+      return { pass: d3.error !== null && d3.error.off === 2, detail: d3.error ? d3.error.message : "none" };
+    });
+    t("control characters in a module name are escaped for display", function(){
+      var out = asciiSafe("os" + String.fromCharCode(0) + String.fromCharCode(0x202e) + "system");
+      return { pass: out.indexOf("\\x00") >= 0 && out.indexOf("\\u202e") >= 0, detail: out };
+    });
+    t("escapeHtml escapes quotes as well as angle brackets", function(){
+      var out = escapeHtml('a"b<c>d&e' + "'f");
+      return eq(out, "a&quot;b&lt;c&gt;d&amp;e&#39;f", "escaped");
+    });
+    t("the allowlist snapshot has 144 entries and no duplicate", function(){
+      var seen = Object.create(null);
+      var dup = "";
+      for (var i = 0; i < PROFILE.allowRows.length; i++){
+        var p = PROFILE.allowRows[i].path;
+        if (Object.prototype.hasOwnProperty.call(seen, p)) dup = p;
+        seen[p] = true;
+      }
+      return { pass: PROFILE.allowRows.length === 144 && dup === "",
+               detail: PROFILE.allowRows.length + " rows, duplicate: " + (dup || "none") };
+    });
+    t("the twelve torch.cuda storage classes are on the allowlist", function(){
+      var missing = [];
+      var want = ["Double","Float","Long","Int","Short","Char","Byte","Half","Bool","BFloat16",
+                  "ComplexDouble","ComplexFloat"];
+      for (var i = 0; i < want.length; i++){
+        var p = "torch.cuda." + want[i] + "Storage";
+        if (!isAllowedGlobal(PROFILE, p, null)) missing.push(p);
+      }
+      return { pass: missing.length === 0, detail: missing.join(", ") || "all twelve present" };
+    });
+    t("the pre-0.0.27 model does not treat STRING as a string operand", function(){
+      /* 0.0.27 added STRING, BINSTRING and SHORT_BINSTRING in the same release as
+         the range fix, so a protocol 2 pickle whose operands are STRING opcodes
+         must come back as unknown.unknown under the vulnerable version. */
+      var b = bytesFromLatin1("\x80\x02S'os'\nS'system'\n\x93S'ls'\n\x85R.");
+      var d2 = disassemblePickle(b, 0);
+      var r = picklescanStackGlobal(opsForPicklescan(d2, b), "pre-0.0.27");
+      return { pass: !r.raised && r.globals.length === 1 &&
+                     r.globals[0][0] === "unknown" && r.globals[0][1] === "unknown",
+               detail: r.raised ? r.error : JSON.stringify(r.globals) };
+    });
+    t("the supported-opcode snapshot has 34 entries and excludes STACK_GLOBAL", function(){
+      var hasSg = false;
+      for (var i = 0; i < PROFILE.opcodeNames.length; i++){
+        if (PROFILE.opcodeNames[i] === "STACK_GLOBAL") hasSg = true;
+      }
+      return { pass: PROFILE.opcodeNames.length === 34 && !hasSg,
+               detail: PROFILE.opcodeNames.length + " opcodes, STACK_GLOBAL present: " + hasSg };
+    });
+
+    return tests;
+  }
+
+  function renderTests(){
+    var tests = runSelfTests();
+    var passed = 0;
+    for (var i = 0; i < tests.length; i++) if (tests[i].pass) passed++;
+    var badge = $("test-summary");
+    badge.textContent = passed + " / " + tests.length + " passing";
+    badge.className = "badge " + (passed === tests.length ? "ok" : "bad");
+
+    var s = '<div class="scrollx scrolly" style="margin-top:10px"><table><thead><tr><th>result</th>' +
+            "<th>assertion</th><th>detail</th></tr></thead><tbody>";
+    for (var j = 0; j < tests.length; j++){
+      var tt = tests[j];
+      s += '<tr class="' + (tt.pass ? "good" : "hit") + '"><td class="m">' + (tt.pass ? "PASS" : "FAIL") +
+           "</td><td>" + escapeHtml(tt.name) + '</td><td class="tiny m">' +
+           escapeHtml(asciiSafe(tt.detail, 220)) + "</td></tr>";
+    }
+    s += "</tbody></table></div>";
+    html($("test-block"), s);
+    return { passed: passed, total: tests.length };
+  }
+
+  $("btn-selftest").addEventListener("click", function(){
+    renderTests();
+    document.getElementById("h-tests").scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+  $("btn-selftest2").addEventListener("click", function(){ renderTests(); });
+
+  /* ---------- file input wiring ---------- */
+  var drop = $("drop");
+  var fileInput = $("file");
+  $("btn-pick").addEventListener("click", function(e){ e.stopPropagation(); fileInput.click(); });
+  drop.addEventListener("click", function(){ fileInput.click(); });
+  drop.addEventListener("keydown", function(e){
+    if (e.key === "Enter" || e.key === " "){ e.preventDefault(); fileInput.click(); }
+  });
+  fileInput.addEventListener("change", function(){
+    if (fileInput.files && fileInput.files[0]){
+      var f = fileInput.files[0];
+      loadSource(sourceFromBlob(f.name, f));
+    }
+  });
+  ["dragenter", "dragover"].forEach(function(ev){
+    drop.addEventListener(ev, function(e){ e.preventDefault(); drop.classList.add("hot"); });
+  });
+  ["dragleave", "drop"].forEach(function(ev){
+    drop.addEventListener(ev, function(e){ e.preventDefault(); drop.classList.remove("hot"); });
+  });
+  drop.addEventListener("drop", function(e){
+    e.preventDefault();
+    var dt = e.dataTransfer;
+    if (dt && dt.files && dt.files[0]){
+      var f = dt.files[0];
+      loadSource(sourceFromBlob(f.name, f));
+    }
+  });
+
+  renderReference();
+  renderSampleButtons();
+  renderCve();
+})();
+</script>
+</body>
+</html>
