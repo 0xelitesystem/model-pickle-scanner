@@ -195,6 +195,7 @@ td.num{text-align:right;font-family:var(--mono);color:var(--fg-dim);white-space:
 tr.hit td{background:color-mix(in srgb,var(--bad) 12%,transparent)}
 tr.note td{background:color-mix(in srgb,var(--warn) 10%,transparent)}
 tr.good td{background:color-mix(in srgb,var(--ok) 9%,transparent)}
+tr.hit .tiny,tr.note .tiny,tr.good .tiny{color:var(--fg-dim)}
 
 pre{margin:0;padding:12px;font-family:var(--mono);font-size:.79rem;line-height:1.5;white-space:pre;color:var(--fg)}
 .codewrap{position:relative}
@@ -254,7 +255,7 @@ mark{background:color-mix(in srgb,var(--accent) 30%,transparent);color:inherit;b
   --bg2: #050505;
   --fg: #e8e8e3;
   --fg-dim: #a8a8a3;
-  --fg-faint: #6e6e68;
+  --fg-faint: #898983;
   --info: #6fd3e0;
   --line: #1f1f1d;
   --line2: #2a2a27;
@@ -271,7 +272,7 @@ mark{background:color-mix(in srgb,var(--accent) 30%,transparent);color:inherit;b
   --bg2: #f4f5f8;
   --fg: #0a0a0a;
   --fg-dim: #2a2a27;
-  --fg-faint: #6e6e68;
+  --fg-faint: #5c5c56;
   --info: #0f5c60;
   --line: #c8cdd5;
   --line2: #aab0ba;
@@ -324,7 +325,7 @@ mark{background:color-mix(in srgb,var(--accent) 30%,transparent);color:inherit;b
       <span class="sub">Or start with a fixture. Everything below is computed from the bytes you give it.</span>
     </header>
 
-    <div class="drop" id="drop" tabindex="0" role="button" aria-describedby="drop-help">
+    <div class="drop" id="drop" tabindex="0" role="group" aria-label="Checkpoint drop zone" aria-describedby="drop-help">
       <div class="big">Drop a checkpoint here</div>
       <div class="tiny" id="drop-help">or press Enter / click to choose a file. Nothing leaves the tab.</div>
       <div class="row center" style="margin-top:12px">
@@ -463,7 +464,7 @@ mark{background:color-mix(in srgb,var(--accent) 30%,transparent);color:inherit;b
       <input type="search" id="allow-filter" placeholder="filter, e.g. Storage or rebuild" autocomplete="off">
       <span class="tiny" id="allow-count"></span>
     </div>
-    <div class="scrollx scrolly"><table id="allow-table">
+    <div class="scrollx scrolly" tabindex="0" role="region" aria-label="Allowed globals table"><table id="allow-table">
       <thead><tr><th>dotted path</th><th>family</th><th>how torch builds it</th></tr></thead>
       <tbody></tbody>
     </table></div>
@@ -2419,7 +2420,7 @@ function crc32(bytes){
     html($("file-summary"), s);
 
     if (state.members.length === 0){ html($("members-block"), ""); return; }
-    var t = '<h3>Archive members</h3><div class="scrollx scrolly"><table><thead><tr>' +
+    var t = '<h3>Archive members</h3><div class="scrollx scrolly" tabindex="0" role="region" aria-label="Archive members table"><table><thead><tr>' +
       "<th>name</th><th>method</th><th>stored</th><th>uncompressed</th><th>crc32</th><th>read</th>" +
       "</tr></thead><tbody>";
     for (var i = 0; i < state.members.length; i++){
@@ -2704,7 +2705,7 @@ function crc32(bytes){
     }
 
     var rows = Math.min(d.ops.length, MAX_ROWS);
-    s += '<div class="scrollx scrolly"><table><thead><tr><th class="num">offset</th><th>opcode</th>' +
+    s += '<div class="scrollx scrolly" tabindex="0" role="region" aria-label="Opcode disassembly table"><table><thead><tr><th class="num">offset</th><th>opcode</th>' +
          '<th>argument</th><th class="num">stack</th><th>note</th></tr></thead><tbody>';
     for (var i = 0; i < rows; i++){
       var op = d.ops[i];
@@ -3109,7 +3110,7 @@ function crc32(bytes){
     badge.textContent = passed + " / " + tests.length + " passing";
     badge.className = "badge " + (passed === tests.length ? "ok" : "bad");
 
-    var s = '<div class="scrollx scrolly" style="margin-top:10px"><table><thead><tr><th>result</th>' +
+    var s = '<div class="scrollx scrolly" style="margin-top:10px" tabindex="0" role="region" aria-label="Self-test results table"><table><thead><tr><th>result</th>' +
             "<th>assertion</th><th>detail</th></tr></thead><tbody>";
     for (var j = 0; j < tests.length; j++){
       var tt = tests[j];
