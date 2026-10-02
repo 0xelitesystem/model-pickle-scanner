@@ -2,9 +2,18 @@
 
 Drop a .pt, .bin, .ckpt or .pkl and read its pickle opcodes in the browser without executing them, including exactly which global or opcode makes torch.load(weights_only=True) refuse the file.
 
-## Live demo
+**Live demo:** https://0xelitesystem.github.io/model-pickle-scanner/
 
-https://0xelitesystem.github.io/model-pickle-scanner/
+## Use
+
+1. Drop a `.pt`, `.bin`, `.ckpt` or `.pkl` file on the page, press **Choose file**, or press **Load sample** to start from a built-in fixture.
+2. Read whether `torch.load(weights_only=True)` would accept the file and, if not, the exact global or opcode that blocks it.
+3. Check the import and call inventory and the opcode disassembly. Press **Copy disassembly** to keep it.
+4. To test an allowlist, enter dotted paths under **Extra safe globals** and press **Re-evaluate with these**.
+
+## Why this exists
+
+Loading a pickle-based checkpoint can run code, and since PyTorch 2.6 the practical question is whether `torch.load` with `weights_only=True` will accept the file at all. This tool answers both by reading the opcode stream without executing anything. It is one HTML file that runs in your browser, with no tracking and no server, under the MIT license.
 
 ## Features
 
@@ -118,6 +127,21 @@ analytics and no API key. Files are read through `File.slice`, so only the byte 
 actually needs are ever read off disk. Strings pulled out of a pickle are rendered as printable ASCII
 with escapes, so a module name carrying control characters or a bidi override cannot disguise itself
 in the output.
+
+The only thing written to storage is your light or dark theme choice, saved in `localStorage` under the key `mps-theme`. The source links on the page go to external sites only when you click them.
+
+## Run locally
+
+```bash
+git clone https://github.com/0xelitesystem/model-pickle-scanner
+cd model-pickle-scanner
+```
+
+Open `index.html` in any modern browser. Or serve the folder with `python -m http.server 8000` and visit http://localhost:8000/.
+
+## Build
+
+No build step. The whole tool is one `index.html` file with its CSS and JavaScript inline, and nothing to install.
 
 ## License
 
